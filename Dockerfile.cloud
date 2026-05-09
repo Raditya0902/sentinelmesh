@@ -1,0 +1,37 @@
+FROM golang:1.23-alpine AS go-builder
+WORKDIR /build
+COPY lobstertrap/go.mod lobstertrap/go.sum ./
+RUN go mod download
+COPY lobstertrap/ .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o lobstertrap .
+
+FROM python:3.13-slim
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=go-builder /build/lobstertrap /usr/local/bin/lobstertrap
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY agents/ agents/
+COPY api/ api/
+COPY orchestrator/ orchestrator/
+COPY rbac/ rbac/
+COPY proxy/ proxy/
+COPY configs/ configs/
+COPY .env.example ./
+
+RUN mkdir -p logs data/chromadb
+
+COPY entrypoint.cloud.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+CMD ["/entrypoint.sh"]
