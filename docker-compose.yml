@@ -1,0 +1,66 @@
+services:
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./data/chromadb:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    restart: always
+
+  lobstertrap:
+    build: ./lobstertrap
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./proxy/policy.yaml:/etc/lobstertrap/policy.yaml
+      - ./logs:/app/logs
+    environment:
+      - BACKEND_URL=http://host.docker.internal:11434
+    command: >
+      serve 
+      --policy /etc/lobstertrap/policy.yaml 
+      --audit-log /app/logs/audit.jsonl 
+      --listen 0.0.0.0:8080
+      --backend http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      - lobstertrap
+      - chromadb
+    environment:
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - LOBSTER_TRAP_URL=http://lobstertrap:8080
+      - AUDIT_LOG_PATH=logs/audit.jsonl
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    restart: always
+
+  dashboard:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file: .env
+    depends_on:
+      - api
+      - lobstertrap
+    environment:
+      - API_URL=http://api:8000
+      - LOBSTER_TRAP_URL=http://lobstertrap:8080
+      - AUDIT_LOG_PATH=logs/audit.jsonl
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    volumes:
+      - ./logs:/app/logs
+    restart: always

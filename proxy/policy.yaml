@@ -1,0 +1,165 @@
+version: "1.0"
+policy_name: "sentinelmesh"
+
+# Default: allow what no rule matches — all explicit threats are denied above
+default_action: ALLOW
+
+ingress_rules:
+  - name: block_prompt_injection
+    description: "Detected prompt injection attempt"
+    priority: 100
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: prompt injection detected."
+    conditions:
+      - field: contains_injection_patterns
+        match_type: boolean
+        value: true
+
+  - name: block_harm_violence
+    description: "Request for harmful or violent content"
+    priority: 98
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: harmful content request detected."
+    conditions:
+      - field: contains_harm_patterns
+        match_type: boolean
+        value: true
+
+  - name: block_malware_request
+    description: "Request for malware or exploit generation"
+    priority: 96
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: malware/exploit generation request."
+    conditions:
+      - field: contains_malware_request
+        match_type: boolean
+        value: true
+
+  - name: block_data_exfiltration
+    description: "Data exfiltration pattern in prompt"
+    priority: 92
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: data exfiltration attempt detected."
+    conditions:
+      - field: contains_exfiltration
+        match_type: boolean
+        value: true
+
+  - name: block_obfuscation_evasion
+    description: "Obfuscation/encoding used to evade DPI"
+    priority: 90
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: obfuscation/evasion detected."
+    conditions:
+      - field: contains_obfuscation
+        match_type: boolean
+        value: true
+
+  - name: block_sensitive_paths
+    description: "Prompt targets sensitive filesystem paths"
+    priority: 85
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: sensitive path access denied."
+    conditions:
+      - field: contains_sensitive_paths
+        match_type: boolean
+        value: true
+
+  - name: block_pii_request
+    description: "Prompt requesting personal/sensitive information"
+    priority: 82
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: PII request detected."
+    conditions:
+      - field: contains_pii_request
+        match_type: boolean
+        value: true
+
+  - name: block_dangerous_commands
+    description: "High-risk system commands"
+    priority: 80
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: dangerous system command detected."
+    conditions:
+      - field: contains_system_commands
+        match_type: boolean
+        value: true
+      - field: risk_score
+        match_type: threshold
+        value: 0.3
+
+  - name: quarantine_high_risk
+    description: "Quarantine requests with risk_score > 0.8 for review"
+    priority: 75
+    action: QUARANTINE
+    conditions:
+      - field: risk_score
+        match_type: threshold
+        value: 0.8
+
+  - name: human_review_mismatch
+    description: "Human review when declared intent does not match detected intent"
+    priority: 72
+    action: HUMAN_REVIEW
+    conditions:
+      - field: declared_intent
+        match_type: exact
+        value: "summarize"
+      - field: has_mismatch
+        match_type: boolean
+        value: true
+
+  - name: log_all_agent_actions
+    description: "Log every agent call for compliance audit trail"
+    priority: 10
+    action: LOG
+    conditions:
+      - field: risk_score
+        match_type: threshold
+        value: 0.0
+
+egress_rules:
+  - name: block_credential_leak
+    description: "Model output contains credentials"
+    priority: 100
+    action: DENY
+    deny_message: "[SENTINEL] Output blocked: credentials detected."
+    conditions:
+      - field: contains_credentials
+        match_type: boolean
+        value: true
+
+  - name: block_pii_exfiltration
+    description: "Model output contains PII (SSN, credit card, etc.)"
+    priority: 90
+    action: DENY
+    deny_message: "[SENTINEL] Output blocked: PII detected in response."
+    conditions:
+      - field: contains_pii
+        match_type: boolean
+        value: true
+
+rate_limits:
+  requests_per_minute: 120
+  requests_per_hour: 2000
+  burst_threshold: 30
+
+network:
+  egress_policy: allowlist
+  allowed_domains: []
+  denied_domains:
+    - "*.onion"
+    - "pastebin.com"
+
+filesystem:
+  denied_paths:
+    - "/etc/**"
+    - "/root/**"
+    - "**/.ssh/**"
+    - "**/.env"
+    - "**/*secret*"
+    - "**/*password*"
+  allowed_read_paths:
+    - "/tmp/agent_workspace/**"
+  allowed_write_paths:
+    - "/tmp/agent_workspace/output/**"

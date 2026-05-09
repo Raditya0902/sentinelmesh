@@ -1,0 +1,154 @@
+# SentinelMesh production policy — stricter than default, HIPAA/SOC2 aligned.
+# Inherit all default rules and add compliance-grade additions.
+
+version: "1.0"
+policy_name: "sentinelmesh-production"
+default_action: ALLOW
+
+ingress_rules:
+  - name: block_prompt_injection
+    priority: 100
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: prompt injection detected."
+    conditions:
+      - field: contains_injection_patterns
+        match_type: boolean
+        value: true
+
+  - name: block_harm_violence
+    priority: 98
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: harmful content."
+    conditions:
+      - field: contains_harm_patterns
+        match_type: boolean
+        value: true
+
+  - name: block_malware
+    priority: 96
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: malware/exploit request."
+    conditions:
+      - field: contains_malware_request
+        match_type: boolean
+        value: true
+
+  - name: block_exfiltration
+    priority: 92
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: data exfiltration attempt."
+    conditions:
+      - field: contains_exfiltration
+        match_type: boolean
+        value: true
+
+  - name: block_obfuscation
+    priority: 90
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: obfuscation detected."
+    conditions:
+      - field: contains_obfuscation
+        match_type: boolean
+        value: true
+
+  - name: block_sensitive_paths
+    priority: 85
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: sensitive path access."
+    conditions:
+      - field: contains_sensitive_paths
+        match_type: boolean
+        value: true
+
+  - name: block_pii_request
+    priority: 82
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: PII request detected."
+    conditions:
+      - field: contains_pii_request
+        match_type: boolean
+        value: true
+
+  - name: block_dangerous_commands
+    priority: 80
+    action: DENY
+    deny_message: "[SENTINEL] Blocked: dangerous command."
+    conditions:
+      - field: contains_system_commands
+        match_type: boolean
+        value: true
+      - field: risk_score
+        match_type: threshold
+        value: 0.3
+
+  - name: quarantine_high_risk
+    priority: 75
+    action: QUARANTINE
+    conditions:
+      - field: risk_score
+        match_type: threshold
+        value: 0.8
+
+  - name: human_review_elevated_risk
+    priority: 72
+    action: HUMAN_REVIEW
+    conditions:
+      - field: risk_score
+        match_type: range
+        value: "0.5-0.8"
+
+  - name: log_all
+    priority: 1
+    action: LOG
+    conditions:
+      - field: risk_score
+        match_type: threshold
+        value: 0.0
+
+egress_rules:
+  - name: block_credential_leak
+    priority: 100
+    action: DENY
+    deny_message: "[SENTINEL] Output blocked: credentials in response."
+    conditions:
+      - field: contains_credentials
+        match_type: boolean
+        value: true
+
+  - name: block_pii_leak
+    priority: 90
+    action: DENY
+    deny_message: "[SENTINEL] Output blocked: PII in response."
+    conditions:
+      - field: contains_pii
+        match_type: boolean
+        value: true
+
+rate_limits:
+  requests_per_minute: 60
+  requests_per_hour: 1000
+  burst_threshold: 15
+
+network:
+  egress_policy: allowlist
+  allowed_domains:
+    - "api.openai.com"
+    - "api.anthropic.com"
+  denied_domains:
+    - "*.onion"
+    - "pastebin.com"
+    - "ngrok.io"
+
+filesystem:
+  denied_paths:
+    - "/etc/**"
+    - "/root/**"
+    - "**/.ssh/**"
+    - "**/.env"
+    - "**/*secret*"
+    - "**/*password*"
+    - "**/*credential*"
+  allowed_read_paths:
+    - "/tmp/agent_workspace/**"
+  allowed_write_paths:
+    - "/tmp/agent_workspace/output/**"
