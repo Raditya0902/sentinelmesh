@@ -42,6 +42,9 @@ func New(pipe *pipeline.Pipeline, backendURL string, logger zerolog.Logger) (*Gu
 			req.URL.Scheme = target.Scheme
 			req.URL.Host = target.Host
 			req.Host = target.Host
+			if target.Path != "" {
+				req.URL.Path = singleJoiningSlash(target.Path, req.URL.Path)
+			}
 		},
 	}
 
@@ -191,6 +194,18 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Handler returns the proxy as an http.Handler.
 func (gp *GuardProxy) Handler() http.Handler {
 	return gp
+}
+
+func singleJoiningSlash(a, b string) string {
+	aslash := strings.HasSuffix(a, "/")
+	bslash := strings.HasPrefix(b, "/")
+	switch {
+	case aslash && bslash:
+		return a + b[1:]
+	case !aslash && !bslash:
+		return a + "/" + b
+	}
+	return a + b
 }
 
 // isChatCompletionEndpoint checks if the path matches known chat completion endpoints.
