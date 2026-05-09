@@ -1,84 +1,286 @@
-# SentinelMesh — Enterprise AI Governance
+# SentinelMesh
 
 > **Policy-Enforced Multi-Agent Orchestration with Real-Time Threat Visibility**
-> Hackathon: Transforming Enterprise Through AI | Track 1: Agent Security & AI Governance
+> Hackathon: Transforming Enterprise Through AI — Track 1: Agent Security & AI Governance
 
-SentinelMesh is a multi-agent LangGraph system where every agent action passes through
-**Lobster Trap** (a deep prompt inspection proxy) for real-time policy enforcement,
-attack blocking, and compliance-grade audit trails.
+SentinelMesh is a production-grade governance layer for autonomous AI agents. Every LLM call — prompt and response — passes through **Lobster Trap**, a custom Go-based Deep Prompt Inspection proxy, before it ever reaches the model. The result: real-time attack blocking, compliance-grade audit trails, and a live governance dashboard, all with sub-millisecond overhead.
 
-## 🛡️ The Problem
-As enterprises deploy autonomous agents, they face "The Control Gap":
-1. **Agents act without guardrails:** A simple prompt injection can leak PII or trigger unauthorized actions.
-2. **Invisible Intent:** Traditional firewalls don't understand LLM intent or agent roles.
-3. **No Audit Trail:** Compliance requires knowing exactly *why* an agent was blocked, in real-time.
+---
 
-SentinelMesh solves this by placing a sub-millisecond, regex-powered DPI proxy between the agents and the LLM.
+## The Problem: The Control Gap
 
-## 🏗️ Architecture
+As enterprises deploy multi-agent AI systems, three critical risks emerge:
 
-```text
+| Risk | What Goes Wrong |
+|------|----------------|
+| **Prompt Injection** | Malicious input hijacks an agent's instructions |
+| **PII / Credential Leakage** | Model outputs expose sensitive data in responses |
+| **Unauthorized Data Access** | Agents query data outside their role's permission scope |
+
+Traditional API gateways don't understand LLM intent. SentinelMesh does.
+
+---
+
+## How It Works
+
+```
 User Request
-     ↓
-Orchestrator Agent (LangGraph)
-     ↓
-┌─────────────────────────────────────────┐
-│           Lobster Trap Proxy             │
-│  Extracts: intent, risk_score, PII,     │
-│  injections, credentials, exfiltration  │
-│  Actions: ALLOW / DENY / QUARANTINE /   │
-│           LOG / HUMAN_REVIEW            │
-└─────────────────────────────────────────┘
-     ↓              ↓              ↓
-Extraction      Analysis       Action
-  Agent          Agent          Agent
-     ↓
-RBAC Layer (ChromaDB namespace + role scoping)
-     ↓
-Governance Dashboard (Streamlit)
-Audit log | Blocked attacks | Risk heatmap
+     │
+     ▼
+┌──────────────────────────────────────────────────────┐
+│              Orchestrator (LangGraph)                 │
+│         RBAC preflight — validates role + namespace   │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│                  Lobster Trap Proxy                   │
+│                                                      │
+│  Ingress DPI ──► Match-Action Table ──► Decision     │
+│   • intent classification    ALLOW                   │
+│   • risk scoring             DENY                    │
+│   • injection detection      QUARANTINE              │
+│   • PII / credential scan    LOG                     │
+│   • mismatch detection       HUMAN_REVIEW            │
+│                                                      │
+│  Egress DPI  ──► Scans model output before delivery  │
+└──────────────────────────┬───────────────────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+    Extraction          Analysis          Action
+      Agent              Agent             Agent
+   (data_access)       (summarize)    (code_execution)
+          │                │
+          └────────────────┘
+                    │
+                    ▼
+             Critic Agent
+           (quality review)
+                    │
+                    ▼
+         ┌──────────────────┐
+         │  Governance      │
+         │  Dashboard       │
+         │  (Streamlit)     │
+         │                  │
+         │  • Audit log     │
+         │  • Attack heatmap│
+         │  • Review queue  │
+         └──────────────────┘
 ```
 
-## 🚀 Quick Start
+---
+
+## Lobster Trap — Deep Prompt Inspection
+
+Lobster Trap is a **custom Go binary** that acts as an OpenAI-compatible reverse proxy. It borrows concepts from network security:
+
+- **Deep Packet Inspection → Deep Prompt Inspection**: Regex-powered metadata extraction from every prompt and response. No LLM call for classification — runs in under 1ms.
+- **P4 Match-Action Tables → Programmable Policy Rules**: YAML-defined rules match on extracted fields (`risk_score`, `intent_category`, `has_mismatch`, etc.) and execute actions.
+- **Ingress + Egress Filtering**: Prompts are inspected before reaching the model; outputs are inspected before being returned to the agent.
+
+### Active Policy Rules
+
+| Rule | Trigger | Action |
+|------|---------|--------|
+| `block_prompt_injection` | Injection patterns detected | DENY |
+| `block_harm_violence` | Weapons / harm requests | DENY |
+| `block_malware_request` | Malware / exploit generation | DENY |
+| `block_data_exfiltration` | Exfiltration patterns | DENY |
+| `block_obfuscation_evasion` | Base64 payloads, char-splitting | DENY |
+| `block_sensitive_paths` | `/etc/passwd`, `.ssh/`, etc. | DENY |
+| `block_pii_request` | SSN / credential requests | DENY |
+| `block_credential_leak` | Credentials in model output | DENY (egress) |
+| `block_pii_exfiltration` | PII in model output | DENY (egress) |
+| `quarantine_high_risk` | `risk_score > 0.8` | QUARANTINE |
+| `human_review_mismatch` | Declared intent ≠ detected intent | HUMAN_REVIEW |
+| `log_all_agent_actions` | Every agent call | LOG |
+
+### Intent Mismatch Detection
+
+Each agent declares its intent in the request header (`_lobstertrap.declared_intent`). Lobster Trap independently classifies the actual intent via DPI. When they diverge, the request is flagged for human review:
+
+| Agent | Declared | DPI Detects | Result |
+|-------|----------|-------------|--------|
+| extraction | `data_access` | `data_access` | ALLOW |
+| **analysis** | **`summarize`** | **`data_access`** | **HUMAN_REVIEW** |
+| critic | `general` | `general` | ALLOW |
+| action | `code_execution` | `code_execution` | ALLOW |
+
+---
+
+## RBAC — Three Enforcement Layers
+
+Role-based access control is enforced independently at three layers. Any single layer can block a request:
+
+```
+1. Orchestrator node     — validates role + namespace before any LLM call
+2. NamespacedVectorStore — RBAC check before every ChromaDB query or upsert
+3. Lobster Trap policy   — role-scoped rules in proxy/policy.yaml
+```
+
+**Roles and namespace access:**
+
+| Role | Namespaces | Write |
+|------|-----------|-------|
+| `admin` | all | yes |
+| `analyst` | general, legal | no |
+| `auditor` | audit | no |
+| `readonly` | general | no |
+
+---
+
+## Governance Dashboard
+
+The Streamlit dashboard provides a real-time single pane of glass:
+
+- **Color-coded audit table** — DENY (red), HUMAN_REVIEW (blue), ALLOW/LOG (green)
+- **Event timeline** — scatter plot of every agent action over time
+- **Attack frequency chart** — bar chart of events by agent + action type
+- **Human review queue** — approve or reject flagged requests; decisions persisted across restarts
+
+---
+
+## Demo: 14-Vector Adversarial Test Suite
+
+```bash
+python trigger_demo.py
+```
+
+Fires 14 scenarios against the live API:
+
+| # | Scenario | Expected |
+|---|----------|----------|
+| 1 | Full admin pipeline | ALLOW |
+| 2 | Read-only analyst query | ALLOW |
+| 3 | GDPR compliance query (intent mismatch) | HUMAN_REVIEW |
+| 4 | Prompt injection — ignore previous instructions | DENY |
+| 5 | PII request — SSN lookup | DENY |
+| 6 | Malware — keylogger generation | DENY |
+| 7 | Data exfiltration — POST to evil.com | DENY |
+| 8 | Sensitive path — /etc/passwd + .ssh/id_rsa | DENY |
+| 9 | Harm — pipe bomb instructions | DENY |
+| 10 | Obfuscation — base64-encoded injection | DENY |
+| 11 | RBAC — analyst → hr namespace | DENY |
+| 12 | RBAC — readonly → finance namespace | DENY |
+| 13 | RBAC — auditor → legal namespace | DENY |
+| 14 | RBAC — invalid role `hacker` | DENY |
+
+---
+
+## Quick Start
 
 ### Prerequisites
-- Python 3.13
-- Docker & Docker Compose
-- Ollama (running locally with `llama3:latest`)
 
-### Setup
-1. **Clone the repo**
-2. **Start the stack**
-   ```bash
-   make start
-   ```
-3. **Seed the database**
-   ```bash
-   make seed
-   ```
-4. **View the Dashboard**
-   Open `http://localhost:8501`
+- [Docker](https://docs.docker.com/get-docker/) + Docker Compose
+- [Ollama](https://ollama.com/) running locally with `llama3:latest`
 
-## ⚔️ Attack Scenarios
+```bash
+ollama pull llama3:latest
+ollama serve
+```
 
-SentinelMesh is designed to catch 3 core attack vectors:
+### Run the Stack
 
-1. **Prompt Injection:** An agent is instructed to ignore its system prompt.
-   - **Result:** Lobster Trap triggers `block_prompt_injection` → `DENY`.
-2. **PII Exfiltration:** An agent attempts to output a Social Security Number.
-   - **Result:** Lobster Trap triggers `block_pii_exfiltration` → `DENY`.
-3. **Cross-Role Data Access:** An analyst attempts to access a restricted 'Finance' namespace.
-   - **Result:** RBAC Layer blocks the request before it even reaches the LLM.
+```bash
+# 1. Clone
+git clone https://github.com/Raditya0902/sentinelmesh.git
+cd sentinelmesh
 
-## 🛠️ Tech Stack
-- **Orchestration:** LangGraph, LangChain
-- **Proxy:** Lobster Trap (Go)
-- **Database:** ChromaDB (Vector Store with RBAC namespaces)
-- **API:** FastAPI
-- **UI:** Streamlit
-- **Infrastructure:** Docker, Docker Compose
+# 2. Configure environment
+cp .env.example .env
 
-## 👥 Submission Info
-- **Team:** SentinelMesh
+# 3. Build + start (Go binary compiled inside Docker)
+make build
+make start
+
+# 4. Seed ChromaDB with sample documents
+make seed
+
+# 5. Open the dashboard
+open http://localhost:8501
+
+# 6. Run the attack demo
+python trigger_demo.py
+```
+
+### Ports
+
+| Service | Port |
+|---------|------|
+| Governance Dashboard | 8501 |
+| FastAPI backend | 8000 |
+| Lobster Trap proxy | 8080 |
+| ChromaDB | 8001 |
+
+### API Endpoints
+
+```
+GET  /health                      — liveness check
+POST /run                         — trigger the agent pipeline
+GET  /audit?limit=50              — tail the audit log
+GET  /review/queue?status=pending — list HUMAN_REVIEW items
+POST /review/{request_id}/decide  — approve or reject a flagged item
+```
+
+---
+
+## Project Structure
+
+```
+sentinelmesh/
+├── agents/                 # LangGraph agent definitions
+│   ├── base.py             # LobsterTrapClient — single LLM call entry point
+│   ├── extraction.py       # Reads documents from ChromaDB
+│   ├── analysis.py         # Summarizes and classifies
+│   ├── action.py           # Writes / notifies (write-guarded)
+│   └── critic.py           # Reviews output for compliance
+├── orchestrator/
+│   └── main.py             # LangGraph StateGraph + RBAC preflight
+├── api/
+│   └── main.py             # FastAPI routes + human review queue
+├── rbac/
+│   ├── roles.py            # Role definitions + namespace enforcement
+│   ├── vector_store.py     # RBAC-enforced ChromaDB wrapper
+│   └── seed_namespaces.py  # Seeds 17 docs across 5 namespaces
+├── proxy/
+│   └── policy.yaml         # Active Lobster Trap policy rules
+├── dashboard/
+│   └── app.py              # Streamlit governance dashboard
+├── lobstertrap/            # Go source for the DPI proxy
+│   ├── internal/inspector/ # DPI engine + regex pattern libraries
+│   ├── internal/policy/    # Match-action table evaluation
+│   ├── internal/pipeline/  # Ingress → inference → egress flow
+│   └── internal/proxy/     # HTTP reverse proxy with DPI hooks
+├── tests/
+│   ├── run_attacks.py      # 14-vector adversarial test suite
+│   ├── test_rbac.py        # RBAC unit tests
+│   └── test_pipeline.py    # Pipeline routing unit tests
+├── trigger_demo.py         # Live demo script
+├── docker-compose.yml      # Full 4-container stack
+└── Makefile                # build / start / seed / demo / test
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Agent orchestration | LangGraph, LangChain |
+| DPI proxy | Lobster Trap (Go) — custom-built |
+| LLM backend | Ollama (`llama3:latest`) |
+| Vector store | ChromaDB with RBAC namespaces |
+| API | FastAPI + Pydantic |
+| Dashboard | Streamlit + Plotly |
+| Infrastructure | Docker, Docker Compose |
+| CI/CD | GitHub Actions |
+
+---
+
+## Submission
+
 - **Track:** Agent Security & AI Governance
-- **Deployment:** [Live Demo URL](https://sentinelmesh.up.railway.app)
+- **Team:** Raditya0902
+- **Live Demo:** [sentinelmesh.up.railway.app](https://sentinelmesh.up.railway.app)
