@@ -6,7 +6,8 @@ from openai import OpenAI
 
 def _make_client() -> OpenAI:
     url = os.getenv("LOBSTER_TRAP_URL", "http://localhost:8080")
-    return OpenAI(base_url=f"{url}/v1", api_key="not-needed")
+    api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or "not-needed"
+    return OpenAI(base_url=f"{url}/v1", api_key=api_key)
 
 
 class LobsterTrapClient:

@@ -18,13 +18,13 @@ services:
       - ./proxy/policy.yaml:/etc/lobstertrap/policy.yaml
       - ./logs:/app/logs
     environment:
-      - BACKEND_URL=http://host.docker.internal:11434
+      - BACKEND_URL=${LLM_BACKEND_URL:-http://host.docker.internal:11434}
     command: >
-      serve 
-      --policy /etc/lobstertrap/policy.yaml 
-      --audit-log /app/logs/audit.jsonl 
+      serve
+      --policy /etc/lobstertrap/policy.yaml
+      --audit-log /app/logs/audit.jsonl
       --listen 0.0.0.0:8080
-      --backend http://host.docker.internal:11434
+      --backend ${LLM_BACKEND_URL:-http://host.docker.internal:11434}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
@@ -42,6 +42,8 @@ services:
       - CHROMA_PORT=8000
       - LOBSTER_TRAP_URL=http://lobstertrap:8080
       - AUDIT_LOG_PATH=logs/audit.jsonl
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     volumes:
       - ./logs:/app/logs
