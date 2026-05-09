@@ -32,5 +32,4 @@ RUN mkdir -p logs && touch logs/.gitkeep
 # Expose ports
 EXPOSE 8000 8501
 
-# Default command (overridden in docker-compose)
-CMD ["python", "--version"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

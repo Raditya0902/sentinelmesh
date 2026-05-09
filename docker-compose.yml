@@ -1,30 +1,29 @@
+volumes:
+  logs:
+  chromadb_data:
+
 services:
   chromadb:
     image: chromadb/chroma:0.6.3
     ports:
       - "8001:8000"
     volumes:
-      - ./data/chromadb:/chroma/chroma
+      - chromadb_data:/chroma/chroma
     environment:
       - IS_PERSISTENT=TRUE
       - PERSIST_DIRECTORY=/chroma/chroma
     restart: always
 
   lobstertrap:
-    build: ./lobstertrap
+    build:
+      context: .
+      dockerfile: lobstertrap/Dockerfile
     ports:
       - "8080:8080"
     volumes:
-      - ./proxy/policy.yaml:/etc/lobstertrap/policy.yaml
-      - ./logs:/app/logs
+      - logs:/app/logs
     environment:
       - BACKEND_URL=${LLM_BACKEND_URL:-http://host.docker.internal:11434}
-    command: >
-      serve
-      --policy /etc/lobstertrap/policy.yaml
-      --audit-log /app/logs/audit.jsonl
-      --listen 0.0.0.0:8080
-      --backend ${LLM_BACKEND_URL:-http://host.docker.internal:11434}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
@@ -46,8 +45,7 @@ services:
       - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
+      - logs:/app/logs
     restart: always
 
   dashboard:
@@ -64,5 +62,5 @@ services:
       - AUDIT_LOG_PATH=logs/audit.jsonl
     command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
     volumes:
-      - ./logs:/app/logs
+      - logs:/app/logs
     restart: always

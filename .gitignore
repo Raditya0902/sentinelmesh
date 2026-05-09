@@ -10,3 +10,6 @@ build/
 venv/
 logs/*.jsonl
 data/
+CLAUDE.md
+GEMINI.md
+dev/active/
