@@ -215,3 +215,42 @@ func TestLoadDefaultPolicy(t *testing.T) {
 		t.Error("expected egress rules")
 	}
 }
+
+// TestSentinelMeshHumanReviewMismatch validates the tuned human_review_mismatch
+// rule: summarize→general is low-risk and should not trigger HUMAN_REVIEW;
+// summarize→data_access is a genuine mismatch and must trigger HUMAN_REVIEW.
+func TestSentinelMeshHumanReviewMismatch(t *testing.T) {
+	pol, err := LoadFromFile("../../../proxy/policy.yaml")
+	if err != nil {
+		t.Fatalf("failed to load SentinelMesh policy: %v", err)
+	}
+
+	table := NewMatchActionTable(pol.IngressRules, ActionAllow)
+
+	// summarize declared, general detected → low-risk ambiguity, NOT HUMAN_REVIEW
+	benign := &inspector.PromptMetadata{
+		DeclaredIntent: "summarize",
+		HasMismatch:    true,
+		IntentCategory: "general",
+		RiskScore:      0.25,
+	}
+	got := table.Evaluate(benign)
+	if got.Action == ActionHumanReview {
+		t.Errorf("benign summarize→general: expected no HUMAN_REVIEW, got %s (rule=%s)", got.Action, got.RuleName)
+	}
+
+	// summarize declared, data_access detected → genuine mismatch, must be HUMAN_REVIEW
+	mismatch := &inspector.PromptMetadata{
+		DeclaredIntent: "summarize",
+		HasMismatch:    true,
+		IntentCategory: "data_access",
+		RiskScore:      0.28,
+	}
+	got2 := table.Evaluate(mismatch)
+	if got2.Action != ActionHumanReview {
+		t.Errorf("summarize→data_access: expected HUMAN_REVIEW, got %s (rule=%s)", got2.Action, got2.RuleName)
+	}
+	if got2.RuleName != "human_review_mismatch" {
+		t.Errorf("expected rule human_review_mismatch, got %q", got2.RuleName)
+	}
+}

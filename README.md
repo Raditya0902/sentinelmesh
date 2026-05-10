@@ -98,17 +98,18 @@ Lobster Trap is a **custom Go binary** that acts as an OpenAI-compatible reverse
 | `block_credential_leak` | Credentials in model output | DENY (egress) |
 | `block_pii_exfiltration` | PII in model output | DENY (egress) |
 | `quarantine_high_risk` | `risk_score > 0.8` | QUARANTINE |
-| `human_review_mismatch` | Declared intent ≠ detected intent | HUMAN_REVIEW |
-| `log_all_agent_actions` | Every agent call | LOG |
+| `human_review_mismatch` | `summarize`-declared requests where DPI detects a non-general intent | HUMAN_REVIEW |
+| `allow_all_agent_actions` | Every agent call that cleared all security rules | ALLOW |
 
 ### Intent Mismatch Detection
 
-Each agent declares its intent in the request header (`_lobstertrap.declared_intent`). Lobster Trap independently classifies the actual intent via DPI. When they diverge, the request is flagged for human review:
+Each agent declares its intent in the request header (`_lobstertrap.declared_intent`). Lobster Trap independently classifies the actual intent via DPI. When the analysis agent declares `summarize` but DPI detects a non-general intent (e.g. `data_access`, `network`, `credential_access`), the request is flagged for human review. A mismatch that resolves to `general` is treated as low-risk ambiguity and allowed:
 
 | Agent | Declared | DPI Detects | Result |
 |-------|----------|-------------|--------|
 | extraction | `data_access` | `data_access` | ALLOW |
 | **analysis** | **`summarize`** | **`data_access`** | **HUMAN_REVIEW** |
+| **analysis** | **`summarize`** | **`general`** | **ALLOW (LOG)** |
 | critic | `general` | `general` | ALLOW |
 | action | `code_execution` | `code_execution` | ALLOW |
 

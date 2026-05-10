@@ -23,9 +23,9 @@ SCENARIOS = [
 
     # ── Human Review ─────────────────────────────────────────────────────────────
     {
-        "label":     "HUMAN_REVIEW — intent mismatch (GDPR query)",
-        "task":      "What does our GDPR compliance review say about data handling procedures?",
-        "document":  "GDPR review April 2026: consent mechanisms audited, no violations found.",
+        "label":     "HUMAN_REVIEW — intent mismatch (GDPR data access)",
+        "task":      "Query the legal database for GDPR data handling procedures and summarize the controls.",
+        "document":  "GDPR review April 2026: consent mechanisms audited, data processing agreements in place.",
         "role":      "analyst",
         "namespace": "legal",
     },

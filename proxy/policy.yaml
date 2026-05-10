@@ -98,7 +98,7 @@ ingress_rules:
         value: 0.8
 
   - name: human_review_mismatch
-    description: "Human review when declared intent does not match detected intent"
+    description: "Human review when declared summarize intent mismatches a non-general detected intent"
     priority: 72
     action: HUMAN_REVIEW
     conditions:
@@ -108,11 +108,15 @@ ingress_rules:
       - field: has_mismatch
         match_type: boolean
         value: true
+      - field: intent_category
+        match_type: exact
+        value: "general"
+        negate: true
 
-  - name: log_all_agent_actions
-    description: "Log every agent call for compliance audit trail"
+  - name: allow_all_agent_actions
+    description: "Allow and record every agent call that cleared all security rules"
     priority: 10
-    action: LOG
+    action: ALLOW
     conditions:
       - field: risk_score
         match_type: threshold
