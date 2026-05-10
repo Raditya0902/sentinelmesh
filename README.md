@@ -175,17 +175,42 @@ Fires 14 scenarios against the live API:
 
 ## Quick Start
 
-### Prerequisites
+### Option A — Cloud (Railway, no local setup)
 
-- [Docker](https://docs.docker.com/get-docker/) + Docker Compose
-- [Ollama](https://ollama.com/) running locally with `llama3:latest`
+The full backend (FastAPI + Lobster Trap + Groq) is deployed and live:
+
+```
+https://sentinelmesh-production.up.railway.app
+```
+
+```bash
+# Health check
+curl https://sentinelmesh-production.up.railway.app/health
+
+# Run the pipeline
+curl -s -X POST https://sentinelmesh-production.up.railway.app/run \
+  -H "Content-Type: application/json" \
+  -d '{"task":"Summarize the quarterly report","document":"Q1 revenue $5M, +20% YoY","role":"analyst","namespace":"general"}'
+
+# Tail the audit log
+curl https://sentinelmesh-production.up.railway.app/audit?limit=10
+
+# Run all 14 attack scenarios against the live API
+API_URL=https://sentinelmesh-production.up.railway.app python trigger_demo.py
+```
+
+> **Note:** The Streamlit governance dashboard runs locally only (Docker). The cloud deployment exposes the FastAPI backend and Lobster Trap proxy.
+
+---
+
+### Option B — Local (Docker, full stack including dashboard)
+
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/) + Docker Compose + [Ollama](https://ollama.com/) with `llama3:latest`
 
 ```bash
 ollama pull llama3:latest
 ollama serve
 ```
-
-### Run the Stack
 
 ```bash
 # 1. Clone
@@ -209,7 +234,7 @@ open http://localhost:8501
 python trigger_demo.py
 ```
 
-### Ports
+### Ports (local Docker)
 
 | Service | Port |
 |---------|------|
