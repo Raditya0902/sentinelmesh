@@ -120,9 +120,13 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store the result in the request context for egress processing
-	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	r.ContentLength = int64(len(bodyBytes))
+	// Strip _lobstertrap before forwarding — backends like Groq reject unknown fields
+	forwardBody, err := stripLobsterTrapField(bodyBytes)
+	if err != nil {
+		forwardBody = bodyBytes
+	}
+	r.Body = io.NopCloser(bytes.NewReader(forwardBody))
+	r.ContentLength = int64(len(forwardBody))
 
 	// Streaming responses cannot be buffered for egress DPI — deny them outright
 	if chatReq.Stream {
@@ -212,6 +216,15 @@ func singleJoiningSlash(a, b string) string {
 }
 
 // isChatCompletionEndpoint checks if the path matches known chat completion endpoints.
+func stripLobsterTrapField(body []byte) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	delete(raw, "_lobstertrap")
+	return json.Marshal(raw)
+}
+
 func isChatCompletionEndpoint(path string) bool {
 	path = strings.TrimSuffix(path, "/")
 	chatPaths := []string{
