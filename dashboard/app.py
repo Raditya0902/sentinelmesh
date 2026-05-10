@@ -338,12 +338,27 @@ def main() -> None:
                 color_discrete_map=COLOR_MAP,
                 labels={"agent_id": "Agent", "timestamp": "Time"},
                 title="Requests per minute",
+                hover_data={"rule_name": True, "risk_score": ":.2f", "direction": True},
             )
-            fig.update_traces(marker=dict(size=14))
+            fig.update_traces(
+                marker=dict(
+                    size=8,
+                    line=dict(width=0.8, color="rgba(255,255,255,0.25)"),
+                ),
+                selector=dict(mode="markers"),
+            )
             fig.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 font_color="white",
+                legend=dict(
+                    bgcolor="rgba(0,0,0,0)",
+                    bordercolor="rgba(255,255,255,0.1)",
+                    borderwidth=1,
+                ),
+                xaxis=dict(gridcolor="rgba(255,255,255,0.07)"),
+                yaxis=dict(gridcolor="rgba(255,255,255,0.07)"),
+                margin=dict(l=10, r=10, t=40, b=10),
             )
             st.plotly_chart(fig, use_container_width=True)
 
