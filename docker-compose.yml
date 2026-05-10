@@ -43,6 +43,7 @@ services:
       - AUDIT_LOG_PATH=logs/audit.jsonl
       - GROQ_API_KEY=${GROQ_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+      - SENTINEL_API_KEY=${SENTINEL_API_KEY:-}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     volumes:
       - logs:/app/logs
@@ -60,6 +61,7 @@ services:
       - API_URL=http://api:8000
       - LOBSTER_TRAP_URL=http://lobstertrap:8080
       - AUDIT_LOG_PATH=logs/audit.jsonl
+      - SENTINEL_API_KEY=${SENTINEL_API_KEY:-}
     command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
     volumes:
       - logs:/app/logs

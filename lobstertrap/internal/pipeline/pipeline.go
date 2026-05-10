@@ -118,6 +118,7 @@ func (p *Pipeline) ProcessIngress(promptText string, declared *metadata.RequestH
 		RuleName:        result.RuleName,
 		DenyMessage:     result.DenyMessage,
 		Metadata:        meta,
+		RiskScore:       meta.RiskScore,
 		TokenCount:      meta.TokenCount,
 		DeclaredHeaders: declared,
 		Mismatches:      mismatches,
@@ -162,6 +163,7 @@ func (p *Pipeline) ProcessEgress(pr *PipelineResult, responseText string) {
 		RuleName:    result.RuleName,
 		DenyMessage: result.DenyMessage,
 		Metadata:    meta,
+		RiskScore:   meta.RiskScore,
 		TokenCount:  meta.TokenCount,
 	})
 
@@ -194,6 +196,64 @@ func (p *Pipeline) notify(event PipelineEvent) {
 	for _, fn := range observers {
 		fn(event)
 	}
+}
+
+// LogStreamingBlock records a DENY audit entry for a request that was blocked
+// because it requested streaming after passing ingress DPI. ProcessIngress already
+// wrote an ALLOW/LOG entry for this request_id; this appends the final DENY so the
+// dashboard counts it as a blocked event. It also marks pr as blocked so that
+// BuildResponseHeaders returns a DENY verdict with full metadata.
+func (p *Pipeline) LogStreamingBlock(pr *PipelineResult) {
+	const denyMsg = "[SENTINEL] Blocked: streaming requests are not permitted."
+
+	// Mark the result as blocked so BuildResponseHeaders produces a consistent DENY
+	// verdict. Overwrite IngressResult so ingress.action and ingress.rule_name in the
+	// _lobstertrap response object match the top-level verdict (not the original ALLOW).
+	pr.Blocked = true
+	pr.BlockedAt = "ingress"
+	pr.DenyMessage = denyMsg
+	pr.IngressResult = &policy.RuleResult{
+		Matched:     true,
+		Action:      policy.ActionDeny,
+		RuleName:    "streaming_blocked",
+		DenyMessage: denyMsg,
+	}
+
+	var agentID string
+	if pr.DeclaredHeaders != nil {
+		agentID = pr.DeclaredHeaders.AgentID
+	}
+
+	var riskScore float64
+	var tokenCount int
+	if pr.IngressMetadata != nil {
+		riskScore = pr.IngressMetadata.RiskScore
+		tokenCount = pr.IngressMetadata.TokenCount
+	}
+
+	p.auditLogger.Log(audit.Entry{ //nolint:errcheck
+		RequestID:       pr.RequestID,
+		Direction:       "ingress",
+		Action:          string(policy.ActionDeny),
+		RuleName:        "streaming_blocked",
+		DenyMessage:     denyMsg,
+		Metadata:        pr.IngressMetadata,
+		RiskScore:       riskScore,
+		TokenCount:      tokenCount,
+		DeclaredHeaders: pr.DeclaredHeaders,
+		Mismatches:      pr.Mismatches,
+		AgentID:         agentID,
+	})
+	p.notify(PipelineEvent{
+		Timestamp: time.Now().UTC(),
+		Direction: "ingress",
+		RequestID: pr.RequestID,
+		Action:    policy.ActionDeny,
+		RuleName:  "streaming_blocked",
+		Metadata:  pr.IngressMetadata,
+		Blocked:   true,
+		DenyMsg:   denyMsg,
+	})
 }
 
 // InspectOnly runs DPI without policy evaluation (for the `inspect` command).

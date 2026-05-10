@@ -26,5 +26,5 @@ We use a StateGraph to manage the agentic lifecycle:
 
 ## 4. Visibility & Governance Dashboard
 - **Real-time Audit:** Streamlit dashboard fetches audit data from `GET /audit?limit=1000` (FastAPI tails the JSONL log with bounded memory). Auto-refreshes every 3 seconds.
-- **Human-in-the-Loop:** High-risk or ambiguous requests are held in a queue. A human administrator must approve or reject the request via the dashboard before the pipeline continues (or for logging the decision).
+- **Human-in-the-Loop:** High-risk or ambiguous requests are flagged and written to a review queue. A human administrator approves or rejects the item via the dashboard; the decision is recorded as a governance audit trail. The original blocked request is not replayed — human review is decision logging, not request release.
 - **Safe log management:** The "Clear Audit Log" action calls `DELETE /audit` on the FastAPI backend, which clears both `audit.jsonl` and `review_decisions.jsonl` under a thread lock — preventing corruption from concurrent proxy writes.

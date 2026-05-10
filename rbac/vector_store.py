@@ -10,8 +10,13 @@ _COLLECTION_PREFIX = "sentinelmesh_"
 
 class NamespacedVectorStore:
     def __init__(self) -> None:
-        path = os.getenv("CHROMA_PERSIST_DIR", "./data/chromadb")
-        self._client = chromadb.PersistentClient(path=path)
+        chroma_host = os.getenv("CHROMA_HOST", "")
+        if chroma_host:
+            chroma_port = int(os.getenv("CHROMA_PORT", "8000"))
+            self._client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
+        else:
+            path = os.getenv("CHROMA_PERSIST_DIR", "./data/chromadb")
+            self._client = chromadb.PersistentClient(path=path)
 
     def _collection(self, namespace: str) -> chromadb.Collection:
         return self._client.get_or_create_collection(f"{_COLLECTION_PREFIX}{namespace}")

@@ -192,7 +192,7 @@ curl -s -X POST https://sentinelmesh-production.up.railway.app/run \
   -H "Content-Type: application/json" \
   -d '{"task":"Summarize the quarterly report","document":"Q1 revenue $5M, +20% YoY","role":"analyst","namespace":"general"}'
 
-# Tail the audit log
+# Tail the audit log (add -H "X-Sentinel-Key: <token>" if SENTINEL_API_KEY is set)
 curl https://sentinelmesh-production.up.railway.app/audit?limit=10
 
 # Run all 14 attack scenarios against the live API
@@ -248,11 +248,14 @@ python trigger_demo.py
 ```
 GET    /health                      — liveness check
 POST   /run                         — trigger the agent pipeline
-GET    /audit?limit=50              — tail the audit log
-DELETE /audit                       — clear audit + decisions logs (thread-safe)
-GET    /review/queue?status=pending — list HUMAN_REVIEW items
-POST   /review/{request_id}/decide  — approve or reject a flagged item
+GET    /audit?limit=50              — tail the audit log            *
+DELETE /audit                       — clear audit + decisions logs  *
+GET    /review/queue?status=pending — list HUMAN_REVIEW items       *
+POST   /review/{request_id}/decide  — approve or reject a flagged item *
 ```
+
+`*` Requires `X-Sentinel-Key: <token>` header when `SENTINEL_API_KEY` env var is set.  
+Leave `SENTINEL_API_KEY` empty for open demo mode.
 
 ---
 

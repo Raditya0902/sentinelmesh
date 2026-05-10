@@ -211,6 +211,95 @@ func TestInjectLobsterTrapHeaders(t *testing.T) {
 	}
 }
 
+func TestExtractPromptText_OllamaGenerateFallback(t *testing.T) {
+	req := &ChatCompletionRequest{
+		Prompt: "What is the capital of France?",
+	}
+	text := ExtractPromptText(req)
+	if text != "What is the capital of France?" {
+		t.Errorf("unexpected text: %q", text)
+	}
+}
+
+func TestExtractResponseText_AllChoices(t *testing.T) {
+	resp := &ChatCompletionResponse{
+		Choices: []ChatChoice{
+			{Message: ChatMessage{Content: "First choice"}},
+			{Message: ChatMessage{Content: "Second choice"}},
+		},
+	}
+	text := ExtractResponseText(resp)
+	if text != "First choice\nSecond choice" {
+		t.Errorf("unexpected text: %q", text)
+	}
+}
+
+func TestExtractResponseText_OllamaResponseFallback(t *testing.T) {
+	resp := &ChatCompletionResponse{
+		Response: "The capital is Paris.",
+	}
+	text := ExtractResponseText(resp)
+	if text != "The capital is Paris." {
+		t.Errorf("unexpected text: %q", text)
+	}
+}
+
+func TestExtractResponseText_OllamaChatMessage(t *testing.T) {
+	resp := &ChatCompletionResponse{
+		Message: &ChatMessage{Role: "assistant", Content: "Chat response here."},
+	}
+	text := ExtractResponseText(resp)
+	if text != "Chat response here." {
+		t.Errorf("unexpected text: %q", text)
+	}
+}
+
+func TestParseChatRequest_StreamExplicitFalse(t *testing.T) {
+	body := `{"model":"llama3","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	req, err := ParseChatRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if req.Stream == nil {
+		t.Fatal("expected Stream non-nil for explicit false")
+	}
+	if *req.Stream {
+		t.Error("expected Stream=false")
+	}
+}
+
+func TestParseChatRequest_StreamOmitted(t *testing.T) {
+	body := `{"model":"llama3","messages":[{"role":"user","content":"hi"}]}`
+	req, err := ParseChatRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if req.Stream != nil {
+		t.Errorf("expected Stream=nil for omitted field, got %v", *req.Stream)
+	}
+}
+
+func TestIsOllamaNativeEndpoint(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"/api/generate", true},
+		{"/api/generate/", true},
+		{"/api/chat", true},
+		{"/api/chat/", true},
+		{"/v1/chat/completions", false},
+		{"/chat/completions", false},
+		{"/health", false},
+	}
+	for _, tc := range tests {
+		got := isOllamaNativeEndpoint(tc.path)
+		if got != tc.expected {
+			t.Errorf("path %q: expected %v, got %v", tc.path, tc.expected, got)
+		}
+	}
+}
+
 func TestIsChatCompletionEndpoint(t *testing.T) {
 	tests := []struct {
 		path     string

@@ -13,8 +13,38 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import itertools
 import json
+import os as _os
+import threading
+import time as _time
+from datetime import datetime as _datetime, timezone as _timezone
+from pathlib import Path as _Path
 from typing import Literal, TypedDict
+
+_AUDIT_LOG_PATH = _Path(_os.getenv("AUDIT_LOG_PATH", "logs/audit.jsonl"))
+_audit_counter = itertools.count(1)
+_audit_lock = threading.Lock()
+
+
+def _write_audit_denial(role: str, namespace: str, rule_name: str, deny_message: str) -> None:
+    with _audit_lock:
+        seq = next(_audit_counter)
+    entry = {
+        "timestamp": _datetime.now(_timezone.utc).isoformat(),
+        "request_id": f"rbac-{int(_time.time() * 1000)}-{seq}",
+        "direction": "ingress",
+        "action": "DENY",
+        "rule_name": rule_name,
+        "deny_message": deny_message,
+        "agent_id": role,
+    }
+    try:
+        _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _AUDIT_LOG_PATH.open("a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass  # Best-effort — never crash the pipeline over an audit write failure
 
 from langgraph.graph import END, StateGraph
 
@@ -57,13 +87,16 @@ def orchestrator_node(state: AgentState) -> AgentState:
     try:
         get_role(state["role"])
     except ValueError as exc:
-        return {**state, "blocked": True, "error": str(exc)}
+        msg = str(exc)
+        _write_audit_denial(state["role"], state["namespace"], "rbac_invalid_role", msg)
+        return {**state, "blocked": True, "error": msg}
 
     if not can_access_namespace(state["role"], state["namespace"]):
         msg = (
             f"Role {state['role']!r} cannot access namespace {state['namespace']!r}. "
             "Access denied."
         )
+        _write_audit_denial(state["role"], state["namespace"], "rbac_namespace_denied", msg)
         return {**state, "blocked": True, "error": msg}
 
     return state
@@ -127,7 +160,9 @@ def action_node(state: AgentState) -> AgentState:
         )
         return {**state, "action_result": result}
     except PermissionError as exc:
-        return {**state, "blocked": True, "error": str(exc)}
+        msg = str(exc)
+        _write_audit_denial(state["role"], state["namespace"], "rbac_write_denied", msg)
+        return {**state, "blocked": True, "error": msg}
     except Exception as exc:
         return {**state, "blocked": True, "error": f"action failed: {exc}"}
 
@@ -143,7 +178,10 @@ def route_after_orchestrator(
 
 
 def route_after_critic(state: AgentState) -> Literal["action_node", "__end__"]:
-    role = get_role(state["role"])
+    try:
+        role = get_role(state["role"])
+    except ValueError:
+        return END
     if role.can_write and not state["blocked"]:
         return "action_node"
     return END

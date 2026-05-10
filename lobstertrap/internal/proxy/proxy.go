@@ -128,9 +128,17 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(forwardBody))
 	r.ContentLength = int64(len(forwardBody))
 
-	// Streaming responses cannot be buffered for egress DPI — deny them outright
-	if chatReq.Stream {
-		denyResp := MakeDenyResponse("[SENTINEL] Blocked: streaming requests are not permitted.", chatReq.Model, nil)
+	// Streaming responses cannot be buffered for egress DPI — deny them.
+	// OpenAI format: block when stream=true.
+	// Ollama native (/api/generate, /api/chat): block when stream is omitted because
+	// Ollama defaults to streaming when the field is absent.
+	explicitStream := chatReq.Stream != nil && *chatReq.Stream
+	implicitStream := chatReq.Stream == nil && isOllamaNativeEndpoint(r.URL.Path)
+	if explicitStream || implicitStream {
+		gp.pipe.LogStreamingBlock(result)
+		gp.logger.Warn().Str("request_id", result.RequestID).Msg("blocked: streaming not permitted")
+		headers := result.BuildResponseHeaders()
+		denyResp := MakeDenyResponse("[SENTINEL] Blocked: streaming requests are not permitted.", chatReq.Model, headers)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(denyResp)
@@ -146,10 +154,12 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	gp.proxy.ServeHTTP(recorder, r)
 
-	// Parse backend response for egress DPI
+	// Parse backend response for egress DPI.
+	// Run inspection for all parseable responses regardless of whether choices is populated —
+	// Ollama /api/generate and /api/chat use Response/Message fields instead of Choices.
 	respBody := recorder.body.Bytes()
 	chatResp, err := ParseChatResponse(respBody)
-	if err == nil && len(chatResp.Choices) > 0 {
+	if err == nil {
 		responseText := ExtractResponseText(chatResp)
 		gp.pipe.ProcessEgress(result, responseText)
 
@@ -213,6 +223,13 @@ func singleJoiningSlash(a, b string) string {
 		return a + "/" + b
 	}
 	return a + b
+}
+
+// isOllamaNativeEndpoint returns true for Ollama-native paths (/api/generate, /api/chat).
+// These endpoints default stream=true when the field is omitted.
+func isOllamaNativeEndpoint(path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	return strings.HasSuffix(path, "/api/generate") || strings.HasSuffix(path, "/api/chat")
 }
 
 // isChatCompletionEndpoint checks if the path matches known chat completion endpoints.

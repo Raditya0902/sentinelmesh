@@ -18,6 +18,8 @@ type Entry struct {
 	DenyMessage     string    `json:"deny_message,omitempty"`
 	Metadata        any       `json:"metadata,omitempty"`
 	Prompt          string    `json:"prompt,omitempty"`
+	// RiskScore and TokenCount are promoted from Metadata for easy top-level access by consumers.
+	RiskScore       float64   `json:"risk_score,omitempty"`
 	TokenCount      int       `json:"token_count,omitempty"`
 	DeclaredHeaders any       `json:"declared_headers,omitempty"`
 	Mismatches      any       `json:"mismatches,omitempty"`

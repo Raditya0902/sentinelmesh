@@ -21,7 +21,47 @@ import streamlit as st
 
 # Configuration
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+SENTINEL_API_KEY = os.getenv("SENTINEL_API_KEY", "")
 REFRESH_INTERVAL_SEC = 3
+
+
+def _auth_headers() -> dict:
+    """Return X-Sentinel-Key header when SENTINEL_API_KEY is configured."""
+    if SENTINEL_API_KEY:
+        return {"X-Sentinel-Key": SENTINEL_API_KEY}
+    return {}
+
+# Severity order for deduplicating multiple audit rows per request_id.
+# Streaming blocks and egress blocks produce > 1 row per request_id.
+_ACTION_SEVERITY = {"DENY": 5, "QUARANTINE": 4, "HUMAN_REVIEW": 3, "LOG": 2, "ALLOW": 1}
+
+
+def _deduplicate_calls(df: pd.DataFrame) -> pd.DataFrame:
+    """Return one row per request_id keeping the most severe action.
+
+    The audit log can have multiple rows per request (ingress + egress, or
+    streaming ALLOW then DENY). Metrics should count unique calls, not rows.
+    """
+    if df.empty or "request_id" not in df.columns:
+        return df
+    df = df.copy()
+    df["_sev"] = df["action"].map(_ACTION_SEVERITY).fillna(0)
+    sort_cols = ["_sev"]
+    sort_asc = [False]
+    # Secondary: highest risk row wins ties on severity (picks most informative row).
+    if "risk_score" in df.columns:
+        sort_cols.append("risk_score")
+        sort_asc.append(False)
+    # Tertiary: latest event wins remaining ties (most recent state).
+    if "timestamp" in df.columns:
+        sort_cols.append("timestamp")
+        sort_asc.append(False)
+    deduped = (
+        df.sort_values(sort_cols, ascending=sort_asc)
+        .drop_duplicates(subset=["request_id"], keep="first")
+    )
+    return deduped.drop(columns=["_sev"])
+
 
 # UI Constants
 COLOR_MAP = {
@@ -43,7 +83,7 @@ ACTION_BG = {
 
 def load_audit_entries() -> list[dict]:
     try:
-        resp = requests.get(f"{API_URL}/audit?limit=1000", timeout=3)
+        resp = requests.get(f"{API_URL}/audit?limit=1000", headers=_auth_headers(), timeout=3)
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException:
@@ -52,7 +92,11 @@ def load_audit_entries() -> list[dict]:
 
 def get_review_queue() -> list[dict]:
     try:
-        resp = requests.get(f"{API_URL}/review/queue?status=pending", timeout=2)
+        resp = requests.get(
+            f"{API_URL}/review/queue?status=pending",
+            headers=_auth_headers(),
+            timeout=2,
+        )
         if resp.status_code == 200:
             return resp.json()
     except Exception:
@@ -65,6 +109,7 @@ def submit_decision(request_id: str, decision: str, note: str) -> bool:
         resp = requests.post(
             f"{API_URL}/review/{request_id}/decide",
             json={"decision": decision, "note": note},
+            headers=_auth_headers(),
             timeout=5,
         )
         return resp.status_code == 200
@@ -96,7 +141,7 @@ def render_sidebar(df: pd.DataFrame) -> dict:
     st.sidebar.divider()
     if st.sidebar.button("Clear Audit Log (Danger Zone)", type="secondary"):
         try:
-            resp = requests.delete(f"{API_URL}/audit", timeout=5)
+            resp = requests.delete(f"{API_URL}/audit", headers=_auth_headers(), timeout=5)
             if resp.status_code == 200:
                 st.rerun()
         except Exception as e:
@@ -118,9 +163,10 @@ def render_metrics(df: pd.DataFrame, pending_count: int) -> None:
         cols[3].metric("Avg Risk", "0.00")
         return
 
-    total = len(df)
-    blocked = len(df[df["action"].isin(["DENY", "QUARANTINE"])])
-    avg_risk = df["risk_score"].mean() if "risk_score" in df.columns else 0.0
+    calls = _deduplicate_calls(df)
+    total = len(calls)
+    blocked = len(calls[calls["action"].isin(["DENY", "QUARANTINE"])])
+    avg_risk = calls["risk_score"].mean() if "risk_score" in calls.columns else 0.0
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Calls", total)

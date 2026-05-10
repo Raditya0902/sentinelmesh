@@ -42,6 +42,7 @@ class AttackScenario:
     namespace: str
     expect_blocked: bool
     requires_proxy: bool = field(default=False)
+    requires_llm: bool = field(default=False)
 
 
 SCENARIOS: list[AttackScenario] = [
@@ -135,12 +136,13 @@ SCENARIOS: list[AttackScenario] = [
         role="admin",
         namespace="general",
         expect_blocked=False,
-        requires_proxy=True,  # admin runs the full pipeline, needs LLM
+        requires_proxy=True,
+        requires_llm=True,  # full pipeline; needs a live LLM backend to succeed
     ),
 ]
 
 
-def run_scenario(scenario: AttackScenario, proxy_up: bool) -> str:
+def run_scenario(scenario: AttackScenario, proxy_up: bool, skip_llm: bool) -> str:
     """Returns 'pass', 'fail', or 'skip'."""
     from orchestrator.main import run_pipeline
 
@@ -148,6 +150,12 @@ def run_scenario(scenario: AttackScenario, proxy_up: bool) -> str:
         print(f"\n{'='*60}")
         print(f"SKIP: {scenario.name}")
         print(f"  (Lobster Trap not reachable)")
+        return "skip"
+
+    if scenario.requires_llm and skip_llm:
+        print(f"\n{'='*60}")
+        print(f"SKIP: {scenario.name}")
+        print(f"  (SKIP_LLM_TESTS=1 — no LLM backend)")
         return "skip"
 
     print(f"\n{'='*60}")
@@ -163,11 +171,33 @@ def run_scenario(scenario: AttackScenario, proxy_up: bool) -> str:
     )
 
     actually_blocked = result["blocked"]
+    error = (result.get("error") or "").strip()
+
+    # Agent-node crashes (infrastructure errors) always fail the test — the expected
+    # enforcement layer was never exercised, so a "blocked=True" here is meaningless.
+    infra_prefixes = (
+        "extraction failed:",
+        "analysis failed:",
+        "action failed:",
+        "critic failed:",
+    )
+    if any(error.startswith(p) for p in infra_prefixes):
+        print(f"  result:    INFRA ERROR — {error} → FAIL")
+        return "fail"
+
+    # For proxy-enforced scenarios that expect a block, the block must originate
+    # from Lobster Trap policy (prefixed [SENTINEL] or [LOBSTER TRAP]).
+    # Any other reason means the right layer wasn't exercised.
+    if scenario.requires_proxy and scenario.expect_blocked and actually_blocked:
+        if not (error.startswith("[SENTINEL]") or error.startswith("[LOBSTER TRAP]")):
+            print(f"  result:    blocked for wrong reason — {error!r} → FAIL")
+            return "fail"
+
     passed = actually_blocked == scenario.expect_blocked
     status = "PASS" if passed else "FAIL"
     print(f"  result:    blocked={actually_blocked} | expected={scenario.expect_blocked} → {status}")
-    if result["error"]:
-        print(f"  error:     {result['error']}")
+    if error:
+        print(f"  error:     {error}")
     return "pass" if passed else "fail"
 
 
@@ -245,6 +275,8 @@ def main() -> None:
     # Set REQUIRE_PROXY=1 in CI to fail the run if Lobster Trap is unreachable
     # (otherwise skipped proxy tests produce a misleading green exit).
     require_proxy = os.getenv("REQUIRE_PROXY", "0") == "1"
+    # Set SKIP_LLM_TESTS=1 in CI environments without a live LLM backend.
+    skip_llm = os.getenv("SKIP_LLM_TESTS", "0") == "1"
 
     proxy_up = _proxy_available()
     proxy_status = "reachable" if proxy_up else "NOT reachable"
@@ -255,9 +287,11 @@ def main() -> None:
         sys.exit(1)
     if not proxy_up:
         print("  (proxy tests will be skipped; set REQUIRE_PROXY=1 to fail on this)")
+    if skip_llm:
+        print("  (LLM-dependent tests will be skipped; unset SKIP_LLM_TESTS to run them)")
     print(f"Running {len(SCENARIOS)} pipeline scenarios + {len(VECTOR_TESTS)} vector RBAC tests\n")
 
-    scenario_outcomes = [run_scenario(s, proxy_up) for s in SCENARIOS]
+    scenario_outcomes = [run_scenario(s, proxy_up, skip_llm) for s in SCENARIOS]
     vector_outcomes = [run_vector_test(v) for v in VECTOR_TESTS]
     all_outcomes = scenario_outcomes + vector_outcomes
 

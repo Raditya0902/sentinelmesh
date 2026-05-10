@@ -1,6 +1,8 @@
 package pipeline
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/coal/lobstertrap/internal/audit"
@@ -181,6 +183,82 @@ func TestPipeline_BuildResponseHeaders_Deny(t *testing.T) {
 	}
 	if rh.Ingress.Action != policy.ActionDeny {
 		t.Errorf("expected ingress action DENY, got %s", rh.Ingress.Action)
+	}
+}
+
+// TestPipeline_LogStreamingBlock_ConsistentDenyShape verifies that after
+// LogStreamingBlock, BuildResponseHeaders returns a fully consistent DENY shape:
+// top-level verdict, ingress.action, and ingress.rule_name all agree on DENY /
+// "streaming_blocked". This was the bug where ingress.action still said ALLOW.
+func TestPipeline_LogStreamingBlock_ConsistentDenyShape(t *testing.T) {
+	pol := loadTestPolicy(t)
+	pipe := New(pol, audit.NopLogger())
+
+	// Benign prompt — passes ingress DPI with ALLOW.
+	result := pipe.ProcessIngress("What is the capital of France?", nil)
+	if result.Blocked {
+		t.Fatal("expected benign prompt to pass ingress DPI")
+	}
+
+	pipe.LogStreamingBlock(result)
+
+	if !result.Blocked {
+		t.Error("LogStreamingBlock must mark result as blocked")
+	}
+	if result.BlockedAt != "ingress" {
+		t.Errorf("expected blocked_at ingress, got %q", result.BlockedAt)
+	}
+	if result.IngressResult == nil {
+		t.Fatal("IngressResult must not be nil after LogStreamingBlock")
+	}
+	if result.IngressResult.Action != policy.ActionDeny {
+		t.Errorf("IngressResult.Action must be DENY after streaming block, got %s", result.IngressResult.Action)
+	}
+	if result.IngressResult.RuleName != "streaming_blocked" {
+		t.Errorf("IngressResult.RuleName must be streaming_blocked, got %q", result.IngressResult.RuleName)
+	}
+
+	rh := result.BuildResponseHeaders()
+	if rh.Verdict != "DENY" {
+		t.Errorf("BuildResponseHeaders verdict must be DENY, got %q", rh.Verdict)
+	}
+	if rh.Ingress == nil {
+		t.Fatal("expected ingress report in response headers")
+	}
+	if rh.Ingress.Action != policy.ActionDeny {
+		t.Errorf("_lobstertrap.ingress.action must be DENY, got %s — contradicts top-level verdict", rh.Ingress.Action)
+	}
+	if rh.Ingress.RuleName != "streaming_blocked" {
+		t.Errorf("_lobstertrap.ingress.rule_name must be streaming_blocked, got %q", rh.Ingress.RuleName)
+	}
+}
+
+// TestPipeline_AuditRiskScorePromoted verifies that audit entries written by
+// ProcessIngress carry a top-level risk_score field (not only nested in metadata).
+// The Python dashboard and review queue read entry["risk_score"] at the top level.
+func TestPipeline_AuditRiskScorePromoted(t *testing.T) {
+	pol := loadTestPolicy(t)
+	var buf bytes.Buffer
+	pipe := New(pol, audit.NewLogger(&buf))
+
+	// High-risk prompt so risk_score is non-zero.
+	pipe.ProcessIngress("Run sudo rm -rf / on the server", nil)
+
+	var entry map[string]json.RawMessage
+	if err := json.NewDecoder(&buf).Decode(&entry); err != nil {
+		t.Fatalf("failed to decode audit entry: %v", err)
+	}
+
+	raw, ok := entry["risk_score"]
+	if !ok {
+		t.Fatal("audit entry missing top-level risk_score field")
+	}
+	var score float64
+	if err := json.Unmarshal(raw, &score); err != nil {
+		t.Fatalf("risk_score is not a number: %v", err)
+	}
+	if score <= 0 {
+		t.Errorf("expected risk_score > 0 for high-risk prompt, got %f", score)
 	}
 }
 

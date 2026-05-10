@@ -17,10 +17,10 @@ import threading
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -34,6 +34,18 @@ app = FastAPI(
 AUDIT_LOG_PATH = Path(os.getenv("AUDIT_LOG_PATH", "logs/audit.jsonl"))
 REVIEW_DECISIONS_PATH = AUDIT_LOG_PATH.parent / "review_decisions.jsonl"
 _review_lock = threading.Lock()
+_SENTINEL_API_KEY = os.getenv("SENTINEL_API_KEY", "")
+
+
+def _require_sentinel_key(x_sentinel_key: Optional[str] = Header(default=None)) -> None:
+    """Validate X-Sentinel-Key header against SENTINEL_API_KEY env var.
+
+    If SENTINEL_API_KEY is not set, auth is skipped for demo/local deployments.
+    """
+    if not _SENTINEL_API_KEY:
+        return
+    if x_sentinel_key != _SENTINEL_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing X-Sentinel-Key")
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -186,7 +198,7 @@ def _to_review_item(entry: dict, decisions: dict[str, dict]) -> ReviewItem:
 
 # ── endpoints ──────────────────────────────────────────────────────────────────
 
-@app.delete("/audit")
+@app.delete("/audit", dependencies=[Depends(_require_sentinel_key)])
 def clear_audit_log() -> dict:
     with _review_lock:
         if AUDIT_LOG_PATH.exists():
@@ -196,8 +208,8 @@ def clear_audit_log() -> dict:
     return {"status": "cleared"}
 
 
-@app.get("/audit")
-def get_audit_log(limit: int = 50) -> list[dict]:
+@app.get("/audit", dependencies=[Depends(_require_sentinel_key)])
+def get_audit_log(limit: int = Query(default=50, ge=1, le=1000)) -> list[dict]:
     if not AUDIT_LOG_PATH.exists():
         return []
 
@@ -210,7 +222,7 @@ def get_audit_log(limit: int = 50) -> list[dict]:
     return entries
 
 
-@app.get("/review/queue", response_model=list[ReviewItem])
+@app.get("/review/queue", response_model=list[ReviewItem], dependencies=[Depends(_require_sentinel_key)])
 def get_review_queue(status: str = "pending") -> list[ReviewItem]:
     hr_entries = _read_audit_human_review()
     decisions = _read_decisions()
@@ -225,7 +237,7 @@ def get_review_queue(status: str = "pending") -> list[ReviewItem]:
     return items  # "all"
 
 
-@app.post("/review/{request_id}/decide", response_model=ReviewItem)
+@app.post("/review/{request_id}/decide", response_model=ReviewItem, dependencies=[Depends(_require_sentinel_key)])
 def decide_review_item(request_id: str, body: ReviewDecision) -> ReviewItem:
     hr_entries = _read_audit_human_review()
     entry_map = {e.get("request_id", ""): e for e in hr_entries}

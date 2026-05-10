@@ -18,9 +18,13 @@ type ChatMessage struct {
 type ChatCompletionRequest struct {
 	Model       string        `json:"model"`
 	Messages    []ChatMessage `json:"messages"`
+	// Ollama /api/generate sends a top-level "prompt" string instead of messages.
+	Prompt      string        `json:"prompt,omitempty"`
 	Temperature *float64      `json:"temperature,omitempty"`
 	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Stream      bool          `json:"stream,omitempty"`
+	// Pointer so we can distinguish "explicitly false" from "omitted".
+	// Ollama native endpoints default stream=true when the field is absent.
+	Stream      *bool         `json:"stream,omitempty"`
 	// Lobster Trap metadata headers (optional, from _lobstertrap field)
 	LobsterTrap *metadata.RequestHeaders `json:"_lobstertrap,omitempty"`
 	// Preserve other fields
@@ -41,6 +45,10 @@ type ChatCompletionResponse struct {
 	Created    int64                     `json:"created"`
 	Model      string                    `json:"model"`
 	Choices    []ChatChoice              `json:"choices"`
+	// Ollama /api/generate responds with a top-level "response" string.
+	Response   string                    `json:"response,omitempty"`
+	// Ollama /api/chat native format responds with a top-level "message" object.
+	Message    *ChatMessage              `json:"message,omitempty"`
 	Usage      *Usage                    `json:"usage,omitempty"`
 	LobsterTrap *metadata.ResponseHeaders `json:"_lobstertrap,omitempty"`
 }
@@ -72,6 +80,9 @@ func ParseChatResponse(data []byte) (*ChatCompletionResponse, error) {
 
 // ExtractPromptText extracts the full prompt text from all messages.
 func ExtractPromptText(req *ChatCompletionRequest) string {
+	if len(req.Messages) == 0 {
+		return req.Prompt // Ollama /api/generate fallback
+	}
 	var parts []string
 	for _, msg := range req.Messages {
 		parts = append(parts, msg.Content)
@@ -79,12 +90,26 @@ func ExtractPromptText(req *ChatCompletionRequest) string {
 	return strings.Join(parts, "\n")
 }
 
-// ExtractResponseText extracts the text from the first choice of a response.
+// ExtractResponseText extracts the text from a response for egress DPI.
+// Priority: choices (OpenAI) → response string (Ollama /api/generate) → message (Ollama /api/chat).
+// All choices are concatenated so sensitive data in choices[1+] cannot bypass inspection.
 func ExtractResponseText(resp *ChatCompletionResponse) string {
-	if len(resp.Choices) == 0 {
-		return ""
+	if len(resp.Choices) > 0 {
+		var parts []string
+		for _, c := range resp.Choices {
+			if c.Message.Content != "" {
+				parts = append(parts, c.Message.Content)
+			}
+		}
+		return strings.Join(parts, "\n")
 	}
-	return resp.Choices[0].Message.Content
+	if resp.Response != "" {
+		return resp.Response
+	}
+	if resp.Message != nil {
+		return resp.Message.Content
+	}
+	return ""
 }
 
 // MakeDenyResponse creates a chat completion response with a deny message

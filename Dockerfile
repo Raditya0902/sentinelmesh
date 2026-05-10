@@ -24,6 +24,7 @@ COPY orchestrator/ orchestrator/
 COPY rbac/ rbac/
 COPY proxy/ proxy/
 COPY configs/ configs/
+COPY tests/ tests/
 COPY .env.example ./
 
 # Create logs directory
