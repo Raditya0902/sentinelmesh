@@ -83,8 +83,8 @@ def extraction_node(state: AgentState) -> AgentState:
             role=state["role"],
             namespace=state["namespace"],
         )
-    except Exception:
-        return {**state, "blocked": True, "error": "Agent execution failed"}
+    except Exception as exc:
+        return {**state, "blocked": True, "error": f"extraction failed: {exc}"}
     if _sentinel_blocked(result):
         return {**state, "extracted_data": result, "blocked": True, "error": result}
     return {**state, "extracted_data": result}
@@ -95,8 +95,8 @@ def analysis_node(state: AgentState) -> AgentState:
         return state
     try:
         result = run_analysis(task=state["task"], extracted_data=state["extracted_data"])
-    except Exception:
-        return {**state, "blocked": True, "error": "Agent execution failed"}
+    except Exception as exc:
+        return {**state, "blocked": True, "error": f"analysis failed: {exc}"}
     if _sentinel_blocked(result):
         return {**state, "analysis_result": result, "blocked": True, "error": result}
     return {**state, "analysis_result": result}
@@ -111,8 +111,8 @@ def critic_node(state: AgentState) -> AgentState:
             agent_output=state["analysis_result"],
             agent_name="analysis-agent",
         )
-    except Exception:
-        return {**state, "blocked": True, "error": "Agent execution failed"}
+    except Exception as exc:
+        return {**state, "blocked": True, "error": f"critic failed: {exc}"}
     return {**state, "critic_reviews": [*state["critic_reviews"], review]}
 
 
@@ -128,6 +128,8 @@ def action_node(state: AgentState) -> AgentState:
         return {**state, "action_result": result}
     except PermissionError as exc:
         return {**state, "blocked": True, "error": str(exc)}
+    except Exception as exc:
+        return {**state, "blocked": True, "error": f"action failed: {exc}"}
 
 
 # ── routing ────────────────────────────────────────────────────────────────────
