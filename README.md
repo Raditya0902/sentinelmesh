@@ -78,7 +78,11 @@ Lobster Trap is a **custom Go binary** that acts as an OpenAI-compatible reverse
 
 - **Deep Packet Inspection → Deep Prompt Inspection**: Regex-powered metadata extraction from every prompt and response. No LLM call for classification — runs in under 1ms.
 - **P4 Match-Action Tables → Programmable Policy Rules**: YAML-defined rules match on extracted fields (`risk_score`, `intent_category`, `has_mismatch`, etc.) and execute actions.
-- **Ingress + Egress Filtering**: Prompts are inspected before reaching the model; outputs are inspected before being returned to the agent.
+- **Three-layer ingress enforcement** (evaluated in order for every request):
+  1. Match-action rule table — priority-ordered `ingress_rules` from `proxy/policy.yaml`
+  2. Network policy — checks detected domains against `denied_domains` / `allowed_domains`
+  3. Filesystem policy — checks detected paths against `denied_paths` using `**`-aware glob matching
+- **Ingress + Egress Filtering**: Prompts are inspected before reaching the model; outputs are buffered and inspected before delivery. Streaming is denied to prevent egress inspection bypass.
 
 ### Active Policy Rules
 
@@ -217,11 +221,12 @@ python trigger_demo.py
 ### API Endpoints
 
 ```
-GET  /health                      — liveness check
-POST /run                         — trigger the agent pipeline
-GET  /audit?limit=50              — tail the audit log
-GET  /review/queue?status=pending — list HUMAN_REVIEW items
-POST /review/{request_id}/decide  — approve or reject a flagged item
+GET    /health                      — liveness check
+POST   /run                         — trigger the agent pipeline
+GET    /audit?limit=50              — tail the audit log
+DELETE /audit                       — clear audit + decisions logs (thread-safe)
+GET    /review/queue?status=pending — list HUMAN_REVIEW items
+POST   /review/{request_id}/decide  — approve or reject a flagged item
 ```
 
 ---
@@ -270,11 +275,11 @@ sentinelmesh/
 |-------|-----------|
 | Agent orchestration | LangGraph, LangChain |
 | DPI proxy | Lobster Trap (Go) — custom-built |
-| LLM backend | Ollama (`llama3:latest`) |
+| LLM backend | Groq (`llama-3.3-70b-versatile`) — cloud; Ollama (`llama3:latest`) — local |
 | Vector store | ChromaDB with RBAC namespaces |
 | API | FastAPI + Pydantic |
 | Dashboard | Streamlit + Plotly |
-| Infrastructure | Docker, Docker Compose |
+| Infrastructure | Docker, Docker Compose, Railway |
 | CI/CD | GitHub Actions |
 
 ---
