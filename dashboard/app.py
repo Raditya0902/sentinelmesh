@@ -11,10 +11,8 @@ Reads the Lobster Trap JSONL audit log and renders:
 
 from __future__ import annotations
 
-import json
 import os
 import time
-from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
@@ -22,7 +20,6 @@ import requests
 import streamlit as st
 
 # Configuration
-AUDIT_LOG_PATH = Path(os.getenv("AUDIT_LOG_PATH", "logs/audit.jsonl"))
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 REFRESH_INTERVAL_SEC = 3
 
@@ -44,16 +41,13 @@ ACTION_BG = {
 }
 
 
-def load_audit_entries(path: Path) -> list[dict]:
-    if not path.exists():
+def load_audit_entries() -> list[dict]:
+    try:
+        resp = requests.get(f"{API_URL}/audit?limit=1000", timeout=3)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException:
         return []
-    entries = []
-    for line in path.read_text().strip().splitlines():
-        try:
-            entries.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return entries
 
 
 def get_review_queue() -> list[dict]:
@@ -101,9 +95,12 @@ def render_sidebar(df: pd.DataFrame) -> dict:
 
     st.sidebar.divider()
     if st.sidebar.button("Clear Audit Log (Danger Zone)", type="secondary"):
-        if AUDIT_LOG_PATH.exists():
-            AUDIT_LOG_PATH.write_text("")
-            st.rerun()
+        try:
+            resp = requests.delete(f"{API_URL}/audit", timeout=5)
+            if resp.status_code == 200:
+                st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Clear failed: {e}")
 
     return {
         "agents": selected_agents,
@@ -233,25 +230,10 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
 
-    # Custom CSS for the badge
-    st.markdown("""
-        <style>
-        .badge {
-            background-color: #ff4b4b;
-            color: white;
-            padding: 4px 8px;
-            text-align: center;
-            border-radius: 10px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
     st.title("🛡️ SentinelMesh — AI Governance Dashboard")
     
     # Load data
-    entries = load_audit_entries(AUDIT_LOG_PATH)
+    entries = load_audit_entries()
     df = pd.DataFrame(entries)
     
     # Get review queue

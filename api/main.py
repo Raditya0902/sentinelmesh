@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
@@ -31,6 +33,7 @@ app = FastAPI(
 
 AUDIT_LOG_PATH = Path(os.getenv("AUDIT_LOG_PATH", "logs/audit.jsonl"))
 REVIEW_DECISIONS_PATH = AUDIT_LOG_PATH.parent / "review_decisions.jsonl"
+_review_lock = threading.Lock()
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -43,7 +46,7 @@ class RunRequest(BaseModel):
     task: str = Field(..., description="Natural-language task for the agent pipeline")
     document: str = Field(default="", description="Source document to process")
     role: str = Field(default="readonly", description="RBAC role of the requester")
-    namespace: str = Field(default="general", description="ChromaDB namespace to access")
+    namespace: str = Field(default="general", description="ChromaDB namespace to access", pattern=r"^[a-zA-Z0-9_-]+$")
 
 
 class RunResponse(BaseModel):
@@ -123,11 +126,20 @@ def run_pipeline_endpoint(req: RunRequest) -> RunResponse:
 
 # ── review queue helpers ───────────────────────────────────────────────────────
 
+MAX_AUDIT_READ_LINES = 10_000
+
+
+def _tail_file(path: Path, n: int) -> list[str]:
+    """Read at most the last n lines of a file without loading it all into memory."""
+    with path.open() as fh:
+        return list(deque(fh, maxlen=n))
+
+
 def _read_audit_human_review() -> list[dict]:
     if not AUDIT_LOG_PATH.exists():
         return []
     entries = []
-    for line in AUDIT_LOG_PATH.read_text().strip().splitlines():
+    for line in _tail_file(AUDIT_LOG_PATH, MAX_AUDIT_READ_LINES):
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
@@ -141,7 +153,7 @@ def _read_decisions() -> dict[str, dict]:
     if not REVIEW_DECISIONS_PATH.exists():
         return {}
     decisions: dict[str, dict] = {}
-    for line in REVIEW_DECISIONS_PATH.read_text().strip().splitlines():
+    for line in _tail_file(REVIEW_DECISIONS_PATH, MAX_AUDIT_READ_LINES):
         try:
             d = json.loads(line)
         except json.JSONDecodeError:
@@ -174,16 +186,23 @@ def _to_review_item(entry: dict, decisions: dict[str, dict]) -> ReviewItem:
 
 # ── endpoints ──────────────────────────────────────────────────────────────────
 
+@app.delete("/audit")
+def clear_audit_log() -> dict:
+    with _review_lock:
+        if AUDIT_LOG_PATH.exists():
+            AUDIT_LOG_PATH.write_text("")
+        if REVIEW_DECISIONS_PATH.exists():
+            REVIEW_DECISIONS_PATH.write_text("")
+    return {"status": "cleared"}
+
+
 @app.get("/audit")
 def get_audit_log(limit: int = 50) -> list[dict]:
     if not AUDIT_LOG_PATH.exists():
         return []
 
-    lines = AUDIT_LOG_PATH.read_text().strip().splitlines()
-    tail = lines[-limit:] if len(lines) > limit else lines
-
     entries = []
-    for line in tail:
+    for line in _tail_file(AUDIT_LOG_PATH, limit):
         try:
             entries.append(json.loads(line))
         except json.JSONDecodeError:
@@ -228,8 +247,9 @@ def decide_review_item(request_id: str, body: ReviewDecision) -> ReviewItem:
         "note": body.note,
         "decided_at": datetime.now(timezone.utc).isoformat(),
     }
-    with REVIEW_DECISIONS_PATH.open("a") as fh:
-        fh.write(json.dumps(record) + "\n")
+    with _review_lock:
+        with REVIEW_DECISIONS_PATH.open("a") as fh:
+            fh.write(json.dumps(record) + "\n")
 
     decisions[request_id] = record
     return _to_review_item(entry_map[request_id], decisions)

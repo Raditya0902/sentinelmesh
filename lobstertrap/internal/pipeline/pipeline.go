@@ -35,6 +35,7 @@ type Pipeline struct {
 	inspector    *inspector.Inspector
 	ingressTable *policy.MatchActionTable
 	egressTable  *policy.MatchActionTable
+	pol          *policy.Policy
 	auditLogger  *audit.Logger
 
 	observerMu sync.RWMutex
@@ -48,6 +49,7 @@ func New(pol *policy.Policy, auditLogger *audit.Logger) *Pipeline {
 		inspector:    inspector.New(),
 		ingressTable: ingress,
 		egressTable:  egress,
+		pol:          pol,
 		auditLogger:  auditLogger,
 	}
 }
@@ -68,6 +70,22 @@ func (p *Pipeline) ProcessIngress(promptText string, declared *metadata.RequestH
 	}
 
 	result := p.ingressTable.Evaluate(meta)
+
+	// Enforce network and filesystem policies for requests that passed rule evaluation.
+	// The YAML `network` and `filesystem` sections are separate from ingress_rules and
+	// must be checked explicitly — they are not part of the match-action table.
+	if result.Action == policy.ActionAllow || result.Action == policy.ActionLog {
+		if len(meta.TargetDomains) > 0 {
+			if blocked, msg := policy.CheckNetworkPolicy(&p.pol.Network, meta.TargetDomains); blocked {
+				result = policy.RuleResult{Matched: true, RuleName: "network_policy", Action: policy.ActionDeny, DenyMessage: msg}
+			}
+		}
+		if result.Action != policy.ActionDeny && len(meta.TargetPaths) > 0 {
+			if blocked, msg := policy.CheckFilesystemPolicy(&p.pol.Filesystem, meta.TargetPaths); blocked {
+				result = policy.RuleResult{Matched: true, RuleName: "filesystem_policy", Action: policy.ActionDeny, DenyMessage: msg}
+			}
+		}
+	}
 
 	// Detect mismatches between declared and detected metadata
 	mismatches := metadata.DetectMismatches(declared, meta)

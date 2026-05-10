@@ -32,7 +32,7 @@ func Handler(hub *Hub) http.Handler {
 	// WebSocket endpoint
 	mux.HandleFunc("/_lobstertrap/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			InsecureSkipVerify: true, // Allow connections from any origin
+			OriginPatterns: []string{"localhost:*", "127.0.0.1:*"},
 		})
 		if err != nil {
 			return

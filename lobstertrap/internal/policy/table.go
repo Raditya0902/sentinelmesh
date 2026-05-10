@@ -181,8 +181,7 @@ func matchGlob(fieldVal any, condVal any, field string) bool {
 	// If field is a string slice (e.g., target_paths), check if any element matches
 	if slice, ok := fieldVal.([]string); ok {
 		for _, s := range slice {
-			matched, err := filepath.Match(pattern, s)
-			if err == nil && matched {
+			if matchGlobWithDoublestar(pattern, s) {
 				return true
 			}
 		}
@@ -190,8 +189,79 @@ func matchGlob(fieldVal any, condVal any, field string) bool {
 	}
 
 	fs := fmt.Sprintf("%v", fieldVal)
-	matched, err := filepath.Match(pattern, fs)
-	return err == nil && matched
+	return matchGlobWithDoublestar(pattern, fs)
+}
+
+// matchGlobWithDoublestar matches path against pattern with support for **
+// wildcards that span multiple path segments (e.g. /etc/**, **/.ssh/**).
+// filepath.Match only supports single-segment * wildcards.
+func matchGlobWithDoublestar(pattern, path string) bool {
+	return matchParts(strings.Split(pattern, "/"), strings.Split(path, "/"))
+}
+
+func matchParts(patParts, sParts []string) bool {
+	for len(patParts) > 0 {
+		if patParts[0] == "**" {
+			if len(patParts) == 1 {
+				return true // ** at the end matches all remaining segments
+			}
+			// Try consuming 0, 1, 2, … segments with **
+			for i := 0; i <= len(sParts); i++ {
+				if matchParts(patParts[1:], sParts[i:]) {
+					return true
+				}
+			}
+			return false
+		}
+		if len(sParts) == 0 {
+			return false
+		}
+		matched, err := filepath.Match(patParts[0], sParts[0])
+		if err != nil || !matched {
+			return false
+		}
+		patParts = patParts[1:]
+		sParts = sParts[1:]
+	}
+	return len(sParts) == 0
+}
+
+// CheckNetworkPolicy returns true and a deny message if any detected domain
+// violates the network deny-list or, when an allowlist is configured, is absent from it.
+func CheckNetworkPolicy(pol *NetworkPolicy, targetDomains []string) (bool, string) {
+	for _, domain := range targetDomains {
+		for _, pattern := range pol.DeniedDomains {
+			if matched, err := filepath.Match(pattern, domain); err == nil && matched {
+				return true, "[SENTINEL] Blocked: access to denied domain: " + domain
+			}
+		}
+		if pol.EgressPolicy == "allowlist" && len(pol.AllowedDomains) > 0 {
+			allowed := false
+			for _, pattern := range pol.AllowedDomains {
+				if matched, err := filepath.Match(pattern, domain); err == nil && matched {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return true, "[SENTINEL] Blocked: domain not in allowlist: " + domain
+			}
+		}
+	}
+	return false, ""
+}
+
+// CheckFilesystemPolicy returns true and a deny message if any detected path
+// matches a denied pattern in the filesystem policy.
+func CheckFilesystemPolicy(pol *FilesystemPolicy, targetPaths []string) (bool, string) {
+	for _, path := range targetPaths {
+		for _, pattern := range pol.DeniedPaths {
+			if matchGlobWithDoublestar(pattern, path) {
+				return true, "[SENTINEL] Blocked: access to denied path: " + path
+			}
+		}
+	}
+	return false, ""
 }
 
 func matchRegex(fieldVal any, condVal any) bool {

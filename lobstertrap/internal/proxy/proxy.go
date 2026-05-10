@@ -60,21 +60,21 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the request body
-	bodyBytes, err := io.ReadAll(r.Body)
+	const maxBodyBytes = 10 * 1024 * 1024 // 10 MB
+
+	// Read the request body with a size cap to prevent OOM via large payloads
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	r.Body.Close()
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
 
-	// Parse the chat request
+	// Parse the chat request — malformed JSON on a known chat endpoint must not
+	// pass uninspected (a parser bypass could allow DPI evasion)
 	chatReq, err := ParseChatRequest(bodyBytes)
 	if err != nil {
-		// Not a valid chat request, pass through
-		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		r.ContentLength = int64(len(bodyBytes))
-		gp.proxy.ServeHTTP(w, r)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
@@ -124,9 +124,12 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	r.ContentLength = int64(len(bodyBytes))
 
-	// For streaming requests, pass through without egress inspection
+	// Streaming responses cannot be buffered for egress DPI — deny them outright
 	if chatReq.Stream {
-		gp.proxy.ServeHTTP(w, r)
+		denyResp := MakeDenyResponse("[SENTINEL] Blocked: streaming requests are not permitted.", chatReq.Model, nil)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(denyResp)
 		return
 	}
 
@@ -210,6 +213,7 @@ func singleJoiningSlash(a, b string) string {
 
 // isChatCompletionEndpoint checks if the path matches known chat completion endpoints.
 func isChatCompletionEndpoint(path string) bool {
+	path = strings.TrimSuffix(path, "/")
 	chatPaths := []string{
 		"/v1/chat/completions",
 		"/api/chat",

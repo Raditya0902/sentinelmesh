@@ -48,3 +48,4 @@ jobs:
       - name: Run Python tests
         run: |
           PYTHONPATH=. pytest tests/test_rbac.py tests/test_pipeline.py
+          PYTHONPATH=. python tests/run_attacks.py

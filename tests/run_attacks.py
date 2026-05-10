@@ -242,10 +242,19 @@ def run_vector_test(vt: VectorTest) -> str:
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # Set REQUIRE_PROXY=1 in CI to fail the run if Lobster Trap is unreachable
+    # (otherwise skipped proxy tests produce a misleading green exit).
+    require_proxy = os.getenv("REQUIRE_PROXY", "0") == "1"
+
     proxy_up = _proxy_available()
-    proxy_status = "reachable" if proxy_up else "NOT reachable — proxy tests will be skipped"
+    proxy_status = "reachable" if proxy_up else "NOT reachable"
     print("SentinelMesh Adversarial Test Suite")
     print(f"Lobster Trap: {proxy_status}")
+    if not proxy_up and require_proxy:
+        print("ERROR: REQUIRE_PROXY=1 but Lobster Trap is unreachable — aborting.")
+        sys.exit(1)
+    if not proxy_up:
+        print("  (proxy tests will be skipped; set REQUIRE_PROXY=1 to fail on this)")
     print(f"Running {len(SCENARIOS)} pipeline scenarios + {len(VECTOR_TESTS)} vector RBAC tests\n")
 
     scenario_outcomes = [run_scenario(s, proxy_up) for s in SCENARIOS]

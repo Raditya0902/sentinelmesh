@@ -70,18 +70,21 @@ def orchestrator_node(state: AgentState) -> AgentState:
 
 
 def _sentinel_blocked(text: str) -> bool:
-    return text.strip().startswith("[SENTINEL]")
+    return text.strip().startswith(("[SENTINEL]", "[LOBSTER TRAP]"))
 
 
 def extraction_node(state: AgentState) -> AgentState:
     if state["blocked"]:
         return state
-    result = run_extraction(
-        task=state["task"],
-        document=state["document"],
-        role=state["role"],
-        namespace=state["namespace"],
-    )
+    try:
+        result = run_extraction(
+            task=state["task"],
+            document=state["document"],
+            role=state["role"],
+            namespace=state["namespace"],
+        )
+    except Exception:
+        return {**state, "blocked": True, "error": "Agent execution failed"}
     if _sentinel_blocked(result):
         return {**state, "extracted_data": result, "blocked": True, "error": result}
     return {**state, "extracted_data": result}
@@ -90,7 +93,10 @@ def extraction_node(state: AgentState) -> AgentState:
 def analysis_node(state: AgentState) -> AgentState:
     if state["blocked"]:
         return state
-    result = run_analysis(task=state["task"], extracted_data=state["extracted_data"])
+    try:
+        result = run_analysis(task=state["task"], extracted_data=state["extracted_data"])
+    except Exception:
+        return {**state, "blocked": True, "error": "Agent execution failed"}
     if _sentinel_blocked(result):
         return {**state, "analysis_result": result, "blocked": True, "error": result}
     return {**state, "analysis_result": result}
@@ -99,11 +105,14 @@ def analysis_node(state: AgentState) -> AgentState:
 def critic_node(state: AgentState) -> AgentState:
     if state["blocked"]:
         return state
-    review = run_critic(
-        task=state["task"],
-        agent_output=state["analysis_result"],
-        agent_name="analysis-agent",
-    )
+    try:
+        review = run_critic(
+            task=state["task"],
+            agent_output=state["analysis_result"],
+            agent_name="analysis-agent",
+        )
+    except Exception:
+        return {**state, "blocked": True, "error": "Agent execution failed"}
     return {**state, "critic_reviews": [*state["critic_reviews"], review]}
 
 

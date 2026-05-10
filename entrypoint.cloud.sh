@@ -4,7 +4,7 @@ set -e
 export LOBSTER_TRAP_URL=http://localhost:8090
 
 echo "[startup] Seeding ChromaDB..."
-python /app/rbac/seed_namespaces.py
+python /app/rbac/seed_namespaces.py || true
 
 echo "[startup] Starting Lobster Trap on :8090..."
 /usr/local/bin/lobstertrap serve \
