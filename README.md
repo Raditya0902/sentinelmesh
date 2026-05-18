@@ -24,17 +24,17 @@ Traditional API gateways don't understand LLM intent. SentinelMesh does.
 ## How It Works
 
 ```
-User Request
-     │
-     ▼
+                       User Request
+                           │
+                           ▼ 
 ┌──────────────────────────────────────────────────────┐
-│              Orchestrator (LangGraph)                 │
-│         RBAC preflight — validates role + namespace   │
+│              Orchestrator (LangGraph)                │
+│         RBAC preflight — validates role + namespace  │
 └──────────────────────────┬───────────────────────────┘
                            │
                            ▼
 ┌──────────────────────────────────────────────────────┐
-│                  Lobster Trap Proxy                   │
+│                  Lobster Trap Proxy                  │
 │                                                      │
 │  Ingress DPI ──► Match-Action Table ──► Decision     │
 │   • intent classification    ALLOW                   │
