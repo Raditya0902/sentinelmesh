@@ -42,9 +42,10 @@ services:
       - LOBSTER_TRAP_URL=http://lobstertrap:8080
       - AUDIT_LOG_PATH=logs/audit.jsonl
       - GROQ_API_KEY=${GROQ_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-llama-3.3-70b-versatile}
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-oss-120b}
       - SENTINEL_API_KEY=${SENTINEL_API_KEY:-}
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+      # SENTINEL_CALLER_KEYS and SENTINEL_DEMO_MODE come from .env via env_file
+    command: uvicorn --factory api.main:create_app --host 0.0.0.0 --port 8000
     volumes:
       - logs:/app/logs
     restart: always

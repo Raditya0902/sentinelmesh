@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY agents/ agents/
 COPY api/ api/
+COPY audit/ audit/
 COPY dashboard/ dashboard/
 COPY orchestrator/ orchestrator/
 COPY rbac/ rbac/
@@ -33,4 +34,4 @@ RUN mkdir -p logs && touch logs/.gitkeep
 # Expose ports
 EXPOSE 8000 8501
 
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn --factory api.main:create_app --host 0.0.0.0 --port ${PORT:-8000}"]

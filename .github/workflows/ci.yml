@@ -54,7 +54,7 @@ jobs:
           
       - name: Run Python tests
         run: |
-          PYTHONPATH=. pytest tests/test_rbac.py tests/test_pipeline.py
+          PYTHONPATH=. pytest tests/
           PYTHONPATH=. python tests/run_attacks.py
 
   test-attacks-stack:
@@ -83,6 +83,7 @@ jobs:
       - name: Start stack (no LLM backend)
         run: |
           cp .env.example .env
+          echo "SENTINEL_DEMO_MODE=1" >> .env
           docker compose up -d chromadb lobstertrap api
           timeout 60 bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
 

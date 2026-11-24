@@ -26,7 +26,7 @@ REFRESH_INTERVAL_SEC = 3
 
 
 def _auth_headers() -> dict:
-    """Return X-Sentinel-Key header when SENTINEL_API_KEY is configured."""
+    """Return X-Sentinel-Key header; SENTINEL_API_KEY is an admin-role key."""
     if SENTINEL_API_KEY:
         return {"X-Sentinel-Key": SENTINEL_API_KEY}
     return {}
@@ -139,13 +139,14 @@ def render_sidebar(df: pd.DataFrame) -> dict:
     selected_rules = st.sidebar.multiselect("Rules", rules, default=rules)
 
     st.sidebar.divider()
-    if st.sidebar.button("Clear Audit Log (Danger Zone)", type="secondary"):
+    if st.sidebar.button("Rotate Audit Log (archives history)", type="secondary"):
         try:
-            resp = requests.delete(f"{API_URL}/audit", headers=_auth_headers(), timeout=5)
+            resp = requests.post(f"{API_URL}/audit/rotate", headers=_auth_headers(), timeout=5)
             if resp.status_code == 200:
                 st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Clear failed: {e}")
+            st.sidebar.error(f"Rotate failed: HTTP {resp.status_code}")
+        except requests.RequestException as e:
+            st.sidebar.error(f"Rotate failed: {e}")
 
     return {
         "agents": selected_agents,

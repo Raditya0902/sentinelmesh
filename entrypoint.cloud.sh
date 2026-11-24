@@ -16,4 +16,4 @@ echo "[startup] Starting Lobster Trap on :8090..."
 sleep 2
 
 echo "[startup] Starting FastAPI on :${PORT:-8000}..."
-exec uvicorn api.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+exec uvicorn --factory api.main:create_app --host 0.0.0.0 --port "${PORT:-8000}"

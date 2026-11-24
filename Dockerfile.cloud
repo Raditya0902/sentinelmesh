@@ -23,6 +23,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY agents/ agents/
 COPY api/ api/
+COPY audit/ audit/
 COPY orchestrator/ orchestrator/
 COPY rbac/ rbac/
 COPY proxy/ proxy/

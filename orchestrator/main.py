@@ -15,36 +15,31 @@ load_dotenv()
 
 import itertools
 import json
-import os as _os
 import threading
 import time as _time
-from datetime import datetime as _datetime, timezone as _timezone
-from pathlib import Path as _Path
 from typing import Literal, TypedDict
 
-_AUDIT_LOG_PATH = _Path(_os.getenv("AUDIT_LOG_PATH", "logs/audit.jsonl"))
+from audit.writer import append_entry
+
 _audit_counter = itertools.count(1)
 _audit_lock = threading.Lock()
 
 
 def _write_audit_denial(role: str, namespace: str, rule_name: str, deny_message: str) -> None:
+    """Record an RBAC denial. Raises AuditWriteError in strict mode if it can't be persisted."""
     with _audit_lock:
         seq = next(_audit_counter)
-    entry = {
-        "timestamp": _datetime.now(_timezone.utc).isoformat(),
+    append_entry({
         "request_id": f"rbac-{int(_time.time() * 1000)}-{seq}",
         "direction": "ingress",
         "action": "DENY",
         "rule_name": rule_name,
         "deny_message": deny_message,
-        "agent_id": role,
-    }
-    try:
-        _AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _AUDIT_LOG_PATH.open("a") as fh:
-            fh.write(json.dumps(entry) + "\n")
-    except OSError:
-        pass  # Best-effort — never crash the pipeline over an audit write failure
+        "agent_id": "orchestrator",
+        "role": role,
+        "namespace": namespace,
+    })
+
 
 from langgraph.graph import END, StateGraph
 

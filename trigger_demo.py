@@ -1,8 +1,31 @@
+"""Fire the demo scenarios at the live API.
+
+Each scenario names the role it plays; the matching API key is looked up from
+SENTINEL_CALLER_KEYS (+ SENTINEL_API_KEY as admin) so the server, not the
+request body, decides the role. Run `make keys` to generate a key set.
+"""
+
+import json
 import os
-import requests
 import time
 
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
 URL = os.getenv("API_URL", "http://localhost:8000") + "/run"
+REQUEST_DELAY_SEC = 0.5
+UNKNOWN_KEY = "not-a-real-key-for-any-role-000"
+
+
+def _keys_by_role() -> dict[str, str]:
+    raw = os.getenv("SENTINEL_CALLER_KEYS", "").strip()
+    keys = json.loads(raw) if raw else {}
+    legacy = os.getenv("SENTINEL_API_KEY", "").strip()
+    if legacy:
+        keys = {**keys, legacy: "admin"}
+    return {role: key for key, role in keys.items()}
 
 SCENARIOS = [
     # ── Happy path ───────────────────────────────────────────────────────────────
@@ -104,7 +127,7 @@ SCENARIOS = [
         "namespace": "legal",
     },
     {
-        "label":     "RBAC DENY — invalid role",
+        "label":     "AUTH DENY — unknown API key",
         "task":      "Show me everything.",
         "document":  "",
         "role":      "hacker",
@@ -113,18 +136,37 @@ SCENARIOS = [
 ]
 
 
+def _headers_for(role: str, keys: dict[str, str]) -> dict[str, str] | None:
+    if role not in keys and role != "hacker":
+        return None
+    return {"X-Sentinel-Key": keys.get(role, UNKNOWN_KEY)}
+
+
+def _outcome(resp: requests.Response) -> tuple[bool, str]:
+    data = resp.json()
+    if resp.status_code != 200:
+        return True, f"HTTP {resp.status_code}: {data.get('detail', '')}"
+    return data.get("blocked", False), data.get("error", "")
+
+
 def run_all() -> None:
+    keys = _keys_by_role()
+    if not keys:
+        print("⚠️  No SENTINEL_CALLER_KEYS found — every call runs as the demo-mode default role.\n")
     print(f"Pumping {len(SCENARIOS)} scenarios into live API...\n")
     counts = {"Allowed": 0, "Blocked": 0, "Error": 0}
 
     for s in SCENARIOS:
         label = s["label"]
-        payload = {k: v for k, v in s.items() if k != "label"}
+        payload = {k: v for k, v in s.items() if k not in ("label", "role")}
+        headers = _headers_for(s["role"], keys) if keys else {}
+        if headers is None:
+            counts["Error"] += 1
+            print(f"⚠️  {label}\n   ↳ no API key configured for role {s['role']!r}")
+            continue
         try:
-            resp = requests.post(URL, json=payload, timeout=30)
-            data = resp.json()
-            blocked = data.get("blocked", False)
-            error = data.get("error", "")
+            resp = requests.post(URL, json=payload, headers=headers, timeout=30)
+            blocked, error = _outcome(resp)
             status = "Blocked" if blocked else "Allowed"
             counts[status] += 1
             indicator = "🔴" if blocked else "🟢"
@@ -135,7 +177,7 @@ def run_all() -> None:
             counts["Error"] += 1
             print(f"⚠️  {label}")
             print(f"   ↳ Error: {e}")
-        time.sleep(0.5)
+        time.sleep(REQUEST_DELAY_SEC)
 
     print(f"\n{'─'*60}")
     print(f"Done: {counts['Allowed']} allowed | {counts['Blocked']} blocked | {counts['Error']} errors")

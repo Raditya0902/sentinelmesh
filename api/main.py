@@ -1,51 +1,81 @@
 """
 SentinelMesh FastAPI backend.
 
-Endpoints:
+Run with the app factory: ``uvicorn --factory api.main:create_app``.
+
+Endpoints (all except / and /health require an X-Sentinel-Key bound to a role):
   GET  /health                      — liveness check
-  POST /run                         — trigger the LangGraph pipeline
-  GET  /audit                       — tail the Lobster Trap audit log
-  GET  /review/queue                — list HUMAN_REVIEW items (pending by default)
-  POST /review/{request_id}/decide  — approve or reject a flagged item
+  POST /run                         — trigger the LangGraph pipeline as the caller's role
+  GET  /audit                       — tail the audit log            (admin, auditor)
+  POST /audit/rotate                — archive the audit log         (admin)
+  GET  /review/queue                — list HUMAN_REVIEW items       (admin, auditor)
+  POST /review/{request_id}/decide  — approve or reject an item     (admin)
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from collections import deque
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
-load_dotenv()
+from api.auth import caller_role, ensure_bootable, load_auth_config, require_roles
+from audit.writer import append_entry, default_audit_path, is_strict, rotate_audit_log
 
-app = FastAPI(
-    title="SentinelMesh API",
-    description="Policy-enforced multi-agent orchestration",
-    version="0.1.0",
-)
+logger = logging.getLogger(__name__)
 
-AUDIT_LOG_PATH = Path(os.getenv("AUDIT_LOG_PATH", "logs/audit.jsonl"))
-REVIEW_DECISIONS_PATH = AUDIT_LOG_PATH.parent / "review_decisions.jsonl"
+GOVERNANCE_READERS = ("admin", "auditor")
+GOVERNANCE_WRITERS = ("admin",)
+
 _review_lock = threading.Lock()
-_SENTINEL_API_KEY = os.getenv("SENTINEL_API_KEY", "")
+router = APIRouter()
 
 
-def _require_sentinel_key(x_sentinel_key: Optional[str] = Header(default=None)) -> None:
-    """Validate X-Sentinel-Key header against SENTINEL_API_KEY env var.
+@dataclass(frozen=True)
+class Settings:
+    audit_log_path: Path
+    decisions_path: Path
+    audit_strict: bool
 
-    If SENTINEL_API_KEY is not set, auth is skipped for demo/local deployments.
-    """
-    if not _SENTINEL_API_KEY:
-        return
-    if x_sentinel_key != _SENTINEL_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing X-Sentinel-Key")
+
+def create_app(env: Optional[Mapping[str, str]] = None) -> FastAPI:
+    """Build the API. Refuses to start without API keys unless SENTINEL_DEMO_MODE=1."""
+    if env is None:
+        load_dotenv()
+        env = os.environ
+    auth = load_auth_config(env)
+    ensure_bootable(auth)
+    if auth.is_open_demo:
+        logger.warning("SENTINEL_DEMO_MODE=1 with no API keys: API is UNAUTHENTICATED")
+
+    audit_path = default_audit_path(env)
+    app = FastAPI(
+        title="SentinelMesh API",
+        description="Policy-enforced multi-agent orchestration",
+        version="0.2.0",
+    )
+    app.state.auth = auth
+    app.state.settings = Settings(
+        audit_log_path=audit_path,
+        decisions_path=audit_path.parent / "review_decisions.jsonl",
+        audit_strict=is_strict(env),
+    )
+    app.include_router(router)
+    return app
+
+
+def _settings(request: Request) -> Settings:
+    return request.app.state.settings
 
 
 def _parse_ts(ts: str) -> datetime:
@@ -55,9 +85,11 @@ def _parse_ts(ts: str) -> datetime:
 # ── schemas ────────────────────────────────────────────────────────────────────
 
 class RunRequest(BaseModel):
+    # Unknown fields (notably "role") are rejected: the role comes from the API key.
+    model_config = ConfigDict(extra="forbid")
+
     task: str = Field(..., description="Natural-language task for the agent pipeline")
     document: str = Field(default="", description="Source document to process")
-    role: str = Field(default="readonly", description="RBAC role of the requester")
     namespace: str = Field(default="general", description="ChromaDB namespace to access", pattern=r"^[a-zA-Z0-9_-]+$")
 
 
@@ -95,7 +127,7 @@ class ReviewItem(BaseModel):
 
 # ── endpoints ──────────────────────────────────────────────────────────────────
 
-@app.get("/")
+@router.get("/")
 def root():
     return {
         "message": "SentinelMesh API is running",
@@ -104,24 +136,25 @@ def root():
     }
 
 
-@app.get("/health", response_model=HealthResponse)
+@router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
-@app.post("/run", response_model=RunResponse)
-def run_pipeline_endpoint(req: RunRequest) -> RunResponse:
+@router.post("/run", response_model=RunResponse)
+def run_pipeline_endpoint(req: RunRequest, role: str = Depends(caller_role)) -> RunResponse:
     from orchestrator.main import run_pipeline
 
     try:
         result = run_pipeline(
             task=req.task,
             document=req.document,
-            role=req.role,
+            role=role,
             namespace=req.namespace,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("pipeline run failed for role=%s", role)
+        raise HTTPException(status_code=500, detail="Pipeline execution failed") from exc
 
     return RunResponse(
         task=result["task"],
@@ -147,11 +180,11 @@ def _tail_file(path: Path, n: int) -> list[str]:
         return list(deque(fh, maxlen=n))
 
 
-def _read_audit_human_review() -> list[dict]:
-    if not AUDIT_LOG_PATH.exists():
+def _read_audit_human_review(audit_path: Path) -> list[dict]:
+    if not audit_path.exists():
         return []
     entries = []
-    for line in _tail_file(AUDIT_LOG_PATH, MAX_AUDIT_READ_LINES):
+    for line in _tail_file(audit_path, MAX_AUDIT_READ_LINES):
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
@@ -161,11 +194,11 @@ def _read_audit_human_review() -> list[dict]:
     return entries
 
 
-def _read_decisions() -> dict[str, dict]:
-    if not REVIEW_DECISIONS_PATH.exists():
+def _read_decisions(decisions_path: Path) -> dict[str, dict]:
+    if not decisions_path.exists():
         return {}
     decisions: dict[str, dict] = {}
-    for line in _tail_file(REVIEW_DECISIONS_PATH, MAX_AUDIT_READ_LINES):
+    for line in _tail_file(decisions_path, MAX_AUDIT_READ_LINES):
         try:
             d = json.loads(line)
         except json.JSONDecodeError:
@@ -198,23 +231,31 @@ def _to_review_item(entry: dict, decisions: dict[str, dict]) -> ReviewItem:
 
 # ── endpoints ──────────────────────────────────────────────────────────────────
 
-@app.delete("/audit", dependencies=[Depends(_require_sentinel_key)])
-def clear_audit_log() -> dict:
+class RotateResponse(BaseModel):
+    status: str
+    archive: str
+
+
+@router.post("/audit/rotate", response_model=RotateResponse)
+def rotate_audit(
+    request: Request,
+    role: str = Depends(require_roles(*GOVERNANCE_WRITERS)),
+) -> RotateResponse:
+    """Archive the audit log and review decisions. History is never deleted."""
+    settings = _settings(request)
     with _review_lock:
-        if AUDIT_LOG_PATH.exists():
-            AUDIT_LOG_PATH.write_text("")
-        if REVIEW_DECISIONS_PATH.exists():
-            REVIEW_DECISIONS_PATH.write_text("")
-    return {"status": "cleared"}
+        archive = rotate_audit_log(settings.audit_log_path, settings.decisions_path, rotated_by=role)
+    return RotateResponse(status="rotated", archive=archive.name)
 
 
-@app.get("/audit", dependencies=[Depends(_require_sentinel_key)])
-def get_audit_log(limit: int = Query(default=50, ge=1, le=1000)) -> list[dict]:
-    if not AUDIT_LOG_PATH.exists():
+@router.get("/audit", dependencies=[Depends(require_roles(*GOVERNANCE_READERS))])
+def get_audit_log(request: Request, limit: int = Query(default=50, ge=1, le=1000)) -> list[dict]:
+    audit_path = _settings(request).audit_log_path
+    if not audit_path.exists():
         return []
 
     entries = []
-    for line in _tail_file(AUDIT_LOG_PATH, limit):
+    for line in _tail_file(audit_path, limit):
         try:
             entries.append(json.loads(line))
         except json.JSONDecodeError:
@@ -222,10 +263,15 @@ def get_audit_log(limit: int = Query(default=50, ge=1, le=1000)) -> list[dict]:
     return entries
 
 
-@app.get("/review/queue", response_model=list[ReviewItem], dependencies=[Depends(_require_sentinel_key)])
-def get_review_queue(status: str = "pending") -> list[ReviewItem]:
-    hr_entries = _read_audit_human_review()
-    decisions = _read_decisions()
+@router.get(
+    "/review/queue",
+    response_model=list[ReviewItem],
+    dependencies=[Depends(require_roles(*GOVERNANCE_READERS))],
+)
+def get_review_queue(request: Request, status: str = "pending") -> list[ReviewItem]:
+    settings = _settings(request)
+    hr_entries = _read_audit_human_review(settings.audit_log_path)
+    decisions = _read_decisions(settings.decisions_path)
     items = [_to_review_item(e, decisions) for e in hr_entries]
 
     if status == "pending":
@@ -237,15 +283,21 @@ def get_review_queue(status: str = "pending") -> list[ReviewItem]:
     return items  # "all"
 
 
-@app.post("/review/{request_id}/decide", response_model=ReviewItem, dependencies=[Depends(_require_sentinel_key)])
-def decide_review_item(request_id: str, body: ReviewDecision) -> ReviewItem:
-    hr_entries = _read_audit_human_review()
+@router.post("/review/{request_id}/decide", response_model=ReviewItem)
+def decide_review_item(
+    request: Request,
+    request_id: str,
+    body: ReviewDecision,
+    role: str = Depends(require_roles(*GOVERNANCE_WRITERS)),
+) -> ReviewItem:
+    settings = _settings(request)
+    hr_entries = _read_audit_human_review(settings.audit_log_path)
     entry_map = {e.get("request_id", ""): e for e in hr_entries}
 
     if request_id not in entry_map:
         raise HTTPException(status_code=404, detail=f"No HUMAN_REVIEW entry found for request_id {request_id!r}")
 
-    decisions = _read_decisions()
+    decisions = _read_decisions(settings.decisions_path)
     if request_id in decisions:
         entry_ts = entry_map[request_id].get("timestamp", "")
         decided_ts = decisions[request_id].get("decided_at", "")
@@ -258,10 +310,10 @@ def decide_review_item(request_id: str, body: ReviewDecision) -> ReviewItem:
         "decision": body.decision,
         "note": body.note,
         "decided_at": datetime.now(timezone.utc).isoformat(),
+        "decided_by_role": role,
     }
     with _review_lock:
-        with REVIEW_DECISIONS_PATH.open("a") as fh:
-            fh.write(json.dumps(record) + "\n")
+        append_entry(record, path=settings.decisions_path, strict=True)
 
     decisions[request_id] = record
     return _to_review_item(entry_map[request_id], decisions)
