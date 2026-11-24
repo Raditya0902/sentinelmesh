@@ -14,7 +14,7 @@
 - **Agent:** Analysis Agent (Output phase)
 - **Policy Rule:** `block_pii_exfiltration`
 - **Expected Action:** `DENY`
-- **Dashboard View:** The pipeline stops. The error message `[SENTINEL] Blocked: PII exfiltration detected.` is captured in the dashboard.
+- **Dashboard View:** The pipeline stops. The error message `[SENTINEL] Output blocked: PII detected in response.` is captured in the dashboard.
 
 ## 3. RBAC Violation (Unauthorized Access)
 **Scenario:** A user with the `analyst` role tries to query documents from the `finance` namespace.
