@@ -1,6 +1,6 @@
 # SentinelMesh
 
-[![CI](https://github.com/Raditya0902/sentinelmesh/actions/workflows/ci.yml/badge.svg)](https://github.com/Raditya0902/sentinelmesh/actions/workflows/ci.yml)
+[![CI](https://github.com/Raditya0902/sentinelmesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Raditya0902/sentinelmesh/actions/workflows/ci.yml)
 
 > **Policy-enforced multi-agent orchestration with real-time threat visibility**
 
