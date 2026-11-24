@@ -170,7 +170,7 @@ Fires 14 scenarios against the live API:
 | 11 | RBAC — analyst → hr namespace | DENY |
 | 12 | RBAC — readonly → finance namespace | DENY |
 | 13 | RBAC — auditor → legal namespace | DENY |
-| 14 | RBAC — invalid role `hacker` | DENY |
+| 14 | Auth — unknown API key | 401 |
 
 ---
 
@@ -188,13 +188,14 @@ https://sentinelmesh-production.up.railway.app
 # Health check
 curl https://sentinelmesh-production.up.railway.app/health
 
-# Run the pipeline
+# Run the pipeline — the role comes from your API key, not the request body
 curl -s -X POST https://sentinelmesh-production.up.railway.app/run \
   -H "Content-Type: application/json" \
-  -d '{"task":"Summarize the quarterly report","document":"Q1 revenue $5M, +20% YoY","role":"analyst","namespace":"general"}'
+  -H "X-Sentinel-Key: <analyst-key>" \
+  -d '{"task":"Summarize the quarterly report","document":"Q1 revenue $5M, +20% YoY","namespace":"general"}'
 
-# Tail the audit log (add -H "X-Sentinel-Key: <token>" if SENTINEL_API_KEY is set)
-curl https://sentinelmesh-production.up.railway.app/audit?limit=10
+# Tail the audit log (admin or auditor key)
+curl -H "X-Sentinel-Key: <auditor-key>" https://sentinelmesh-production.up.railway.app/audit?limit=10
 
 # Run all 14 attack scenarios against the live API
 API_URL=https://sentinelmesh-production.up.railway.app python trigger_demo.py
@@ -218,8 +219,9 @@ ollama serve
 git clone https://github.com/Raditya0902/sentinelmesh.git
 cd sentinelmesh
 
-# 2. Configure environment
+# 2. Configure environment + generate one API key per role
 cp .env.example .env
+make keys   # paste the printed SENTINEL_CALLER_KEYS line into .env
 
 # 3. Build + start (Go binary compiled inside Docker)
 make build
@@ -247,16 +249,21 @@ python trigger_demo.py
 ### API Endpoints
 
 ```
-GET    /health                      — liveness check
-POST   /run                         — trigger the agent pipeline
-GET    /audit?limit=50              — tail the audit log            *
-DELETE /audit                       — clear audit + decisions logs  *
-GET    /review/queue?status=pending — list HUMAN_REVIEW items       *
-POST   /review/{request_id}/decide  — approve or reject a flagged item *
+GET    /health                      — liveness check                     (public)
+POST   /run                         — run the pipeline as the key's role (any key)
+GET    /audit?limit=50              — tail the audit log                 (admin, auditor)
+POST   /audit/rotate                — archive audit + decisions logs     (admin)
+GET    /review/queue?status=pending — list HUMAN_REVIEW items            (admin, auditor)
+POST   /review/{request_id}/decide  — approve or reject a flagged item   (admin)
 ```
 
-`*` Requires `X-Sentinel-Key: <token>` header when `SENTINEL_API_KEY` env var is set.  
-Leave `SENTINEL_API_KEY` empty for open demo mode.
+### Authentication
+
+- Every call except `/health` needs an `X-Sentinel-Key` header. The server maps each key to a role through `SENTINEL_CALLER_KEYS` (a JSON object of key → role). Callers never choose their own role, and a `role` field in the body is rejected with 422.
+- `SENTINEL_API_KEY` is still accepted as a single **admin** key. The dashboard uses it.
+- **Fails closed.** The API won't start without keys. `SENTINEL_DEMO_MODE=1` allows a keyless local demo: anonymous calls run as `readonly` and governance endpoints are open. Never set it in a deployment.
+- **Audited.** Every 401 or 403 is written to the audit log (`auth_missing_key`, `auth_invalid_key`, `auth_role_denied`). The presented key is never logged.
+- **History isn't deleted.** `POST /audit/rotate` archives `audit.jsonl` to `audit-<timestamp>.jsonl` and starts a fresh file.
 
 ---
 
@@ -304,7 +311,7 @@ sentinelmesh/
 |-------|-----------|
 | Agent orchestration | LangGraph, LangChain |
 | DPI proxy | Lobster Trap (Go) — custom-built |
-| LLM backend | Groq (`llama-3.3-70b-versatile`) — cloud; Ollama (`llama3:latest`) — local |
+| LLM backend | Groq (`openai/gpt-oss-120b`) — cloud; Ollama (`llama3:latest`) — local |
 | Vector store | ChromaDB with RBAC namespaces |
 | API | FastAPI + Pydantic |
 | Dashboard | Streamlit + Plotly |
