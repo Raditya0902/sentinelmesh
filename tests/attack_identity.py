@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
+import secrets
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import httpx
@@ -76,14 +78,36 @@ def _api_client():
     return TestClient(create_app())
 
 
+@contextmanager
+def _ephemeral_analyst_key() -> Iterator[str]:
+    """Yield a configured analyst key, or a throwaway one for the in-process app.
+
+    CI has no .env, and the API refuses to boot without keys (fail closed), so the
+    check brings its own key instead of depending on the environment.
+    """
+    key = _key_for_role("analyst")
+    if key:
+        yield key
+        return
+    throwaway = secrets.token_urlsafe(24)
+    previous = os.environ.get("SENTINEL_CALLER_KEYS")
+    os.environ["SENTINEL_CALLER_KEYS"] = json.dumps({throwaway: "analyst"})
+    try:
+        yield throwaway
+    finally:
+        if previous is None:
+            os.environ.pop("SENTINEL_CALLER_KEYS", None)
+        else:
+            os.environ["SENTINEL_CALLER_KEYS"] = previous
+
+
 def check_body_role_spoof() -> str:
     """An analyst key with role=admin in the body must be rejected (and audited)."""
-    key = _key_for_role("analyst")
-    headers = {"X-Sentinel-Key": key} if key else {}
-    resp = _api_client().post(
-        "/run", headers=headers,
-        json={"task": "Retrieve salary bands.", "namespace": "hr", "role": "admin"},
-    )
+    with _ephemeral_analyst_key() as key:
+        resp = _api_client().post(
+            "/run", headers={"X-Sentinel-Key": key},
+            json={"task": "Retrieve salary bands.", "namespace": "hr", "role": "admin"},
+        )
     return _report(resp.status_code == 422, f"HTTP {resp.status_code}")
 
 
