@@ -354,3 +354,7 @@ sentinelmesh/
 
 - **Lobster Trap** by the hackathon sponsor: [github.com/veeainc/lobstertrap](https://github.com/veeainc/lobstertrap), MIT-licensed ([lobstertrap/LICENSE](lobstertrap/LICENSE)). Modifications are listed [above](#built-on-lobster-trap-sponsor).
 - Hackathon submission materials are in [SUBMISSION.md](SUBMISSION.md).
+
+## License
+
+[MIT](LICENSE). Lobster Trap in [`lobstertrap/`](lobstertrap/) is the sponsor's code and keeps its own MIT license ([lobstertrap/LICENSE](lobstertrap/LICENSE)).
