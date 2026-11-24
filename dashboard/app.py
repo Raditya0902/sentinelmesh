@@ -23,6 +23,7 @@ import streamlit as st
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 SENTINEL_API_KEY = os.getenv("SENTINEL_API_KEY", "")
 REFRESH_INTERVAL_SEC = 3
+DECIDE_TIMEOUT_SEC = 120
 
 
 def _auth_headers() -> dict:
@@ -110,7 +111,7 @@ def submit_decision(request_id: str, decision: str, note: str) -> bool:
             f"{API_URL}/review/{request_id}/decide",
             json={"decision": decision, "note": note},
             headers=_auth_headers(),
-            timeout=5,
+            timeout=DECIDE_TIMEOUT_SEC,  # approving resumes the run, which calls the LLM
         )
         return resp.status_code == 200
     except Exception as e:
@@ -144,7 +145,10 @@ def render_sidebar(df: pd.DataFrame) -> dict:
             resp = requests.post(f"{API_URL}/audit/rotate", headers=_auth_headers(), timeout=5)
             if resp.status_code == 200:
                 st.rerun()
-            st.sidebar.error(f"Rotate failed: HTTP {resp.status_code}")
+            elif resp.status_code == 409:
+                st.sidebar.warning("Decide the paused human-review items before rotating.")
+            else:
+                st.sidebar.error(f"Rotate failed: HTTP {resp.status_code}")
         except requests.RequestException as e:
             st.sidebar.error(f"Rotate failed: {e}")
 

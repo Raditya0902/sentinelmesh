@@ -10,20 +10,23 @@ import (
 
 // Entry represents a single audit log entry.
 type Entry struct {
-	Timestamp       time.Time `json:"timestamp"`
-	RequestID       string    `json:"request_id"`
-	Direction       string    `json:"direction"` // "ingress" or "egress"
-	Action          string    `json:"action"`
-	RuleName        string    `json:"rule_name,omitempty"`
-	DenyMessage     string    `json:"deny_message,omitempty"`
-	Metadata        any       `json:"metadata,omitempty"`
-	Prompt          string    `json:"prompt,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+	RequestID   string    `json:"request_id"`
+	Direction   string    `json:"direction"` // "ingress" or "egress"
+	Action      string    `json:"action"`
+	RuleName    string    `json:"rule_name,omitempty"`
+	DenyMessage string    `json:"deny_message,omitempty"`
+	Metadata    any       `json:"metadata,omitempty"`
+	Prompt      string    `json:"prompt,omitempty"`
 	// RiskScore and TokenCount are promoted from Metadata for easy top-level access by consumers.
-	RiskScore       float64   `json:"risk_score,omitempty"`
-	TokenCount      int       `json:"token_count,omitempty"`
-	DeclaredHeaders any       `json:"declared_headers,omitempty"`
-	Mismatches      any       `json:"mismatches,omitempty"`
-	AgentID         string    `json:"agent_id,omitempty"`
+	RiskScore       float64 `json:"risk_score,omitempty"`
+	TokenCount      int     `json:"token_count,omitempty"`
+	DeclaredHeaders any     `json:"declared_headers,omitempty"`
+	Mismatches      any     `json:"mismatches,omitempty"`
+	AgentID         string  `json:"agent_id,omitempty"`
+	// ReviewApproval is "accepted:<id>" or "rejected:<id>" when the request carried
+	// a human-review approval reference.
+	ReviewApproval string `json:"review_approval,omitempty"`
 }
 
 // Logger writes JSON-line audit log entries.

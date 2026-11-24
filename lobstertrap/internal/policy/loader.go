@@ -70,6 +70,15 @@ func validate(p *Policy) error {
 		}
 	}
 
+	for agentID, spec := range p.Agents {
+		if agentID == "" {
+			return fmt.Errorf("agents: agent_id must not be empty")
+		}
+		if len(spec.AllowedIntents) == 0 {
+			return fmt.Errorf("agent %q: at least one allowed_intent is required", agentID)
+		}
+	}
+
 	return nil
 }
 

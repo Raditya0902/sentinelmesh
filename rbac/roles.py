@@ -15,7 +15,7 @@ ROLES: dict[str, Role] = {
         name="admin",
         can_read=True,
         can_write=True,
-        allowed_namespaces=frozenset({"general", "hr", "finance", "legal", "audit"}),
+        allowed_namespaces=frozenset({"general", "hr", "finance", "legal", "audit", "findings"}),
         rate_limit_rpm=500,
     ),
     "analyst": Role(

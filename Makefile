@@ -19,9 +19,12 @@ build:
 seed:
 	docker compose exec api sh -c "PYTHONPATH=. python rbac/seed_namespaces.py"
 
-# Print a fresh SENTINEL_CALLER_KEYS line (one key per role) to paste into .env
+# Print fresh SENTINEL_CALLER_KEYS (one key per role) and LT_AGENT_KEYS (one key per
+# agent registered in proxy/policy.yaml) lines to paste into .env
+AGENT_IDS := extraction-agent-v1 analysis-agent-v1 critic-agent-v1 action-agent-v1
 keys:
 	@python3 -c "import json,secrets; print(\"SENTINEL_CALLER_KEYS='\" + json.dumps({secrets.token_urlsafe(24): r for r in ('admin','analyst','auditor','readonly')}) + \"'\")"
+	@python3 -c "import json,secrets,sys; print(\"LT_AGENT_KEYS='\" + json.dumps({a: secrets.token_urlsafe(24) for a in sys.argv[1:]}) + \"'\")" $(AGENT_IDS)
 
 clean:
 	rm -rf logs/*.jsonl

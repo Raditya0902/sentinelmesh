@@ -77,6 +77,25 @@ type Policy struct {
 	RateLimits    RateLimits       `yaml:"rate_limits" json:"rate_limits"`
 	Network       NetworkPolicy    `yaml:"network" json:"network"`
 	Filesystem    FilesystemPolicy `yaml:"filesystem" json:"filesystem"`
+	// Agents is the registry of known agent identities. When identity binding is
+	// enabled on the pipeline, only these agent_ids are accepted, each may only
+	// declare its listed intents, and each must present its own agent key.
+	Agents map[string]AgentSpec `yaml:"agents,omitempty" json:"agents,omitempty"`
+}
+
+// AgentSpec describes what a registered agent is allowed to claim.
+type AgentSpec struct {
+	AllowedIntents []string `yaml:"allowed_intents" json:"allowed_intents"`
+}
+
+// AllowsIntent reports whether the agent may declare the given intent.
+func (a AgentSpec) AllowsIntent(intent string) bool {
+	for _, allowed := range a.AllowedIntents {
+		if allowed == intent {
+			return true
+		}
+	}
+	return false
 }
 
 // MatchActionTable holds a sorted list of rules and a default action.

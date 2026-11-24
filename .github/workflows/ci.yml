@@ -84,6 +84,8 @@ jobs:
         run: |
           cp .env.example .env
           echo "SENTINEL_DEMO_MODE=1" >> .env
+          sed -i '/^LT_AGENT_KEYS=$/d' .env
+          make keys | grep '^LT_AGENT_KEYS=' >> .env
           docker compose up -d chromadb lobstertrap api
           timeout 60 bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
 
