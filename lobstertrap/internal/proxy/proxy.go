@@ -16,6 +16,15 @@ import (
 	"github.com/coal/lobstertrap/internal/policy"
 )
 
+// Headers SentinelMesh agents send to the proxy. Both are consumed here and
+// stripped before the request is forwarded to the LLM backend.
+const (
+	AgentKeyHeader       = "X-Agent-Key"
+	ReviewApprovalHeader = "X-Sentinel-Review-Approved"
+)
+
+const uninspectableMsg = "[SENTINEL] Output blocked: backend response could not be inspected."
+
 // GuardProxy is an HTTP reverse proxy with DPI hooks.
 type GuardProxy struct {
 	pipe    *pipeline.Pipeline
@@ -53,10 +62,8 @@ func New(pipe *pipeline.Pipeline, backendURL string, logger zerolog.Logger) (*Gu
 
 // ServeHTTP handles incoming requests.
 func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Only inspect chat completion endpoints
 	if !isChatCompletionEndpoint(r.URL.Path) {
-		// Pass through non-chat requests directly
-		gp.proxy.ServeHTTP(w, r)
+		gp.serveUninspected(w, r)
 		return
 	}
 
@@ -78,9 +85,29 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Strip _lobstertrap before forwarding — backends like Groq reject unknown fields.
+	// The stripped body is also what a human-review approval is bound to.
+	forwardBody, err := stripLobsterTrapField(bodyBytes)
+	if err != nil {
+		forwardBody = bodyBytes
+	}
+
 	// Extract prompt text and run ingress DPI with declared headers
 	promptText := ExtractPromptText(chatReq)
-	result := gp.pipe.ProcessIngress(promptText, chatReq.LobsterTrap)
+	result := gp.pipe.ProcessIngressRequest(pipeline.IngressRequest{
+		Prompt:           promptText,
+		Declared:         chatReq.LobsterTrap,
+		AgentKey:         r.Header.Get(AgentKeyHeader),
+		ReviewApprovalID: r.Header.Get(ReviewApprovalHeader),
+		Body:             forwardBody,
+	})
+	// Never forward agent credentials to the backend.
+	r.Header.Del(AgentKeyHeader)
+	r.Header.Del(ReviewApprovalHeader)
+	// Drop the client's Accept-Encoding so Go's transport negotiates compression
+	// itself and hands us a decoded body. Forwarding "gzip" made backends (Groq)
+	// return compressed bytes that egress DPI could not parse, silently skipping it.
+	r.Header.Del("Accept-Encoding")
 
 	gp.logger.Info().
 		Str("request_id", result.RequestID).
@@ -120,11 +147,6 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Strip _lobstertrap before forwarding — backends like Groq reject unknown fields
-	forwardBody, err := stripLobsterTrapField(bodyBytes)
-	if err != nil {
-		forwardBody = bodyBytes
-	}
 	r.Body = io.NopCloser(bytes.NewReader(forwardBody))
 	r.ContentLength = int64(len(forwardBody))
 
@@ -154,36 +176,46 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	gp.proxy.ServeHTTP(recorder, r)
 
+	// Fail closed: a still-encoded body cannot be inspected, so it is not returned.
+	if enc := recorder.header.Get("Content-Encoding"); enc != "" && enc != "identity" {
+		gp.denyUninspectable(w, result, chatReq.Model, "content_encoding="+enc)
+		return
+	}
+
 	// Parse backend response for egress DPI.
 	// Run inspection for all parseable responses regardless of whether choices is populated —
 	// Ollama /api/generate and /api/chat use Response/Message fields instead of Choices.
+	// A body that doesn't parse (e.g. content as an array of parts) is denied, never
+	// forwarded uninspected.
 	respBody := recorder.body.Bytes()
 	chatResp, err := ParseChatResponse(respBody)
-	if err == nil {
-		responseText := ExtractResponseText(chatResp)
-		gp.pipe.ProcessEgress(result, responseText)
-
-		if result.Blocked && result.BlockedAt == "egress" {
-			gp.logger.Warn().
-				Str("request_id", result.RequestID).
-				Str("rule", result.EgressResult.RuleName).
-				Str("deny_message", result.DenyMessage).
-				Msg("blocked at egress")
-
-			headers := result.BuildResponseHeaders()
-			denyResp := MakeDenyResponse(result.DenyMessage, chatResp.Model, headers)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(denyResp)
-			return
-		}
-
-		gp.logger.Info().
-			Str("request_id", result.RequestID).
-			Str("action", string(result.EgressResult.Action)).
-			Str("rule", result.EgressResult.RuleName).
-			Msg("egress")
+	if err != nil {
+		gp.denyUninspectable(w, result, chatReq.Model, "unparseable: "+err.Error())
+		return
 	}
+	responseText := ExtractResponseText(chatResp)
+	gp.pipe.ProcessEgress(result, responseText)
+
+	if result.Blocked && result.BlockedAt == "egress" {
+		gp.logger.Warn().
+			Str("request_id", result.RequestID).
+			Str("rule", result.EgressResult.RuleName).
+			Str("deny_message", result.DenyMessage).
+			Msg("blocked at egress")
+
+		headers := result.BuildResponseHeaders()
+		denyResp := MakeDenyResponse(result.DenyMessage, chatResp.Model, headers)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(denyResp)
+		return
+	}
+
+	gp.logger.Info().
+		Str("request_id", result.RequestID).
+		Str("action", string(result.EgressResult.Action)).
+		Str("rule", result.EgressResult.RuleName).
+		Msg("egress")
 
 	// Inject _lobstertrap headers into the backend response
 	headers := result.BuildResponseHeaders()
@@ -206,6 +238,32 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(injected)))
 	w.WriteHeader(recorder.code)
 	w.Write(injected)
+}
+
+// serveUninspected handles paths that skip DPI. Only read-only methods (e.g.
+// GET /v1/models) are passed through; anything else could carry an uninspected
+// prompt, so it is refused. Agent credentials are never forwarded either way.
+func (gp *GuardProxy) serveUninspected(w http.ResponseWriter, r *http.Request) {
+	r.Header.Del(AgentKeyHeader)
+	r.Header.Del(ReviewApprovalHeader)
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		gp.logger.Warn().Str("method", r.Method).Str("path", r.URL.Path).Msg("blocked: endpoint is not inspected")
+		http.Error(w, `{"error":"[SENTINEL] Blocked: endpoint is not inspected by Lobster Trap."}`, http.StatusForbidden)
+		return
+	}
+	gp.proxy.ServeHTTP(w, r)
+}
+
+// denyUninspectable records and returns an egress DENY for a backend response the
+// proxy could not inspect.
+func (gp *GuardProxy) denyUninspectable(w http.ResponseWriter, result *pipeline.PipelineResult, model, reason string) {
+	gp.pipe.LogEgressBlock(result, "egress_uninspectable", uninspectableMsg)
+	gp.logger.Warn().Str("request_id", result.RequestID).Str("reason", reason).
+		Msg("blocked at egress: response could not be inspected")
+	denyResp := MakeDenyResponse(uninspectableMsg, model, result.BuildResponseHeaders())
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(denyResp)
 }
 
 // Handler returns the proxy as an http.Handler.

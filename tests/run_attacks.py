@@ -1,9 +1,10 @@
 """
-SentinelMesh adversarial test suite — 14 attack vectors across 3 enforcement layers.
+SentinelMesh adversarial test suite — 18 attack vectors across 4 enforcement layers.
 
 Layer A: Orchestrator RBAC (no external services needed)
-Layer B: Lobster Trap policy (requires Lobster Trap + Ollama — skipped if unavailable)
+Layer B: Lobster Trap policy (requires Lobster Trap + an LLM backend — skipped if unavailable)
 Layer C: Vector store RBAC (no external services needed)
+Layer D: Identity spoofing + human-review gate (tests/attack_identity.py)
 
 Exit 0 = all non-skipped tests passed. Exit 1 = at least one failure.
 """
@@ -18,6 +19,11 @@ import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
+
+try:  # run as `python tests/run_attacks.py` (script dir on sys.path) or as a module
+    from attack_identity import IDENTITY_CHECKS, run_identity_check
+except ImportError:
+    from tests.attack_identity import IDENTITY_CHECKS, run_identity_check
 
 
 # ── proxy availability ─────────────────────────────────────────────────────────
@@ -43,6 +49,8 @@ class AttackScenario:
     expect_blocked: bool
     requires_proxy: bool = field(default=False)
     requires_llm: bool = field(default=False)
+    # True when the expected enforcement is a HUMAN_REVIEW hold, not a DENY.
+    expect_review: bool = field(default=False)
 
 
 SCENARIOS: list[AttackScenario] = [
@@ -181,6 +189,15 @@ def run_scenario(scenario: AttackScenario, proxy_up: bool, skip_llm: bool) -> st
         "action failed:",
         "critic failed:",
     )
+    held = result.get("status") == "pending_review"
+    if held != scenario.expect_review:
+        detail = f"held for review ({result.get('review_request_id')})" if held else "not held for review"
+        print(f"  result:    {detail} | expected review={scenario.expect_review} → FAIL")
+        return "fail"
+    if held:
+        print(f"  result:    held for human review ({result['review_request_id']}) → PASS")
+        return "pass"
+
     if any(error.startswith(p) for p in infra_prefixes):
         print(f"  result:    INFRA ERROR — {error} → FAIL")
         return "fail"
@@ -289,11 +306,13 @@ def main() -> None:
         print("  (proxy tests will be skipped; set REQUIRE_PROXY=1 to fail on this)")
     if skip_llm:
         print("  (LLM-dependent tests will be skipped; unset SKIP_LLM_TESTS to run them)")
-    print(f"Running {len(SCENARIOS)} pipeline scenarios + {len(VECTOR_TESTS)} vector RBAC tests\n")
+    print(f"Running {len(SCENARIOS)} pipeline scenarios + {len(VECTOR_TESTS)} vector RBAC tests "
+          f"+ {len(IDENTITY_CHECKS)} identity/HITL checks\n")
 
     scenario_outcomes = [run_scenario(s, proxy_up, skip_llm) for s in SCENARIOS]
     vector_outcomes = [run_vector_test(v) for v in VECTOR_TESTS]
-    all_outcomes = scenario_outcomes + vector_outcomes
+    identity_outcomes = [run_identity_check(c, proxy_up, skip_llm) for c in IDENTITY_CHECKS]
+    all_outcomes = scenario_outcomes + vector_outcomes + identity_outcomes
 
     passed = all_outcomes.count("pass")
     failed = all_outcomes.count("fail")

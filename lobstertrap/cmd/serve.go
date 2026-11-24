@@ -18,11 +18,12 @@ import (
 )
 
 var (
-	policyFile  string
-	listenAddr  string
-	backendURL  string
-	auditFile   string
-	noDashboard bool
+	policyFile    string
+	listenAddr    string
+	backendURL    string
+	auditFile     string
+	decisionsFile string
+	noDashboard   bool
 )
 
 var serveCmd = &cobra.Command{
@@ -37,6 +38,7 @@ func init() {
 	serveCmd.Flags().StringVar(&listenAddr, "listen", ":8080", "Address to listen on")
 	serveCmd.Flags().StringVar(&backendURL, "backend", "http://localhost:11434", "Backend LLM server URL")
 	serveCmd.Flags().StringVar(&auditFile, "audit-log", "", "Path to audit log file (default: stderr)")
+	serveCmd.Flags().StringVar(&decisionsFile, "review-decisions", "", "Path to review decisions JSONL (default: review_decisions.jsonl next to --audit-log)")
 	serveCmd.Flags().BoolVar(&noDashboard, "no-dashboard", false, "Disable the real-time dashboard")
 }
 
@@ -68,8 +70,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 		auditLogger = audit.NewStderrLogger()
 	}
 
-	// Create pipeline
-	pipe := pipeline.New(pol, auditLogger)
+	// Create pipeline with identity binding and human-review approvals
+	if decisionsFile == "" {
+		decisionsFile = defaultDecisionsPath(auditFile)
+	}
+	opts, err := pipelineOptions(pol, os.Getenv(agentKeysEnv), decisionsFile)
+	if err != nil {
+		return fmt.Errorf("configuring pipeline: %w", err)
+	}
+	if len(pol.Agents) > 0 {
+		logger.Info().Int("agents", len(pol.Agents)).Msg("agent identity binding enabled")
+	} else {
+		logger.Warn().Msg("policy has no agents: section — agent identity binding is DISABLED; any caller may claim any agent_id/intent")
+	}
+	if decisionsFile != "" {
+		logger.Info().Str("path", decisionsFile).Msg("human-review approvals enabled")
+	}
+	pipe := pipeline.New(pol, auditLogger, opts...)
 
 	// Create proxy
 	guardProxy, err := proxy.New(pipe, backendURL, logger)

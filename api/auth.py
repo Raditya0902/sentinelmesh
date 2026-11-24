@@ -13,7 +13,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Optional
 
@@ -98,7 +98,13 @@ def ensure_bootable(config: AuthConfig) -> None:
     )
 
 
-def _audit_auth_denial(request: Request, rule_name: str, message: str, role: str = "") -> None:
+def _audit_auth_denial(
+    request: Request,
+    rule_name: str,
+    message: str,
+    role: str = "",
+    extra: Optional[Mapping[str, str]] = None,
+) -> None:
     with _auth_seq_lock:
         seq = next(_auth_seq)
     settings = request.app.state.settings
@@ -112,6 +118,7 @@ def _audit_auth_denial(request: Request, rule_name: str, message: str, role: str
             "agent_id": "api",
             "role": role,
             "path": request.url.path,
+            **(extra or {}),
         },
         path=settings.audit_log_path,
         strict=settings.audit_strict,
@@ -160,3 +167,32 @@ def require_roles(*allowed: str) -> Callable[..., str]:
         return role
 
     return dependency
+
+
+MAX_CLAIMED_ROLE_CHARS = 32
+
+
+def _claimed_role(errors: Sequence[Mapping]) -> Optional[str]:
+    for err in errors:
+        if err.get("type") == "extra_forbidden" and tuple(err.get("loc", ())) == ("body", "role"):
+            return str(err.get("input", ""))[:MAX_CLAIMED_ROLE_CHARS]
+    return None
+
+
+def audit_role_spoof(request: Request, errors: Sequence[Mapping]) -> None:
+    """Audit a request body that tried to pick its own role (it is rejected with 422).
+
+    Body validation runs after the key dependency, so the key here was already valid;
+    the entry records the role the key really holds next to the role it claimed.
+    """
+    claimed = _claimed_role(errors)
+    if claimed is None:
+        return
+    config: AuthConfig = request.app.state.auth
+    presented = request.headers.get(KEY_HEADER, "")
+    actual = (config.resolve_role(presented) if presented else None) or ""
+    _audit_auth_denial(
+        request, "auth_role_spoof_attempt",
+        "Request body tried to set its own role; roles come from the API key",
+        actual, extra={"claimed_role": claimed},
+    )

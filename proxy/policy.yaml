@@ -167,3 +167,17 @@ filesystem:
     - "/tmp/agent_workspace/**"
   allowed_write_paths:
     - "/tmp/agent_workspace/output/**"
+
+# ── Agent identity registry ──────────────────────────────────────────────────
+# Enforced by `lobstertrap serve` (keys from LT_AGENT_KEYS, sent as X-Agent-Key).
+# A request is denied if its agent_id is unknown, its key does not match, or it
+# declares an intent its agent is not registered for. Keep in sync with agents/*.py.
+agents:
+  extraction-agent-v1:
+    allowed_intents: [data_access]
+  analysis-agent-v1:
+    allowed_intents: [summarize]
+  critic-agent-v1:
+    allowed_intents: [general]
+  action-agent-v1:
+    allowed_intents: [code_execution]

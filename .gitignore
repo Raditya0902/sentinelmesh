@@ -13,3 +13,7 @@ data/
 CLAUDE.md
 GEMINI.md
 dev/active/
+
+# coverage
+.coverage
+htmlcov/
