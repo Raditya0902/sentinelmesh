@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 import orchestrator.main as orch
 from agents.base import HumanReviewRequired, _approved_review_id
-from api.main import create_app
 
 ADMIN_KEY = "admin-key-0123456789abcdef"
 ANALYST_KEY = "analyst-key-0123456789abcd"
@@ -21,12 +20,12 @@ def audit_log(_isolated_audit_log):
 
 
 @pytest.fixture
-def client(audit_log):
+def client(audit_log, make_app):
     env = {
         "SENTINEL_CALLER_KEYS": json.dumps({ADMIN_KEY: "admin", ANALYST_KEY: "analyst"}),
         "AUDIT_LOG_PATH": str(audit_log),
     }
-    return TestClient(create_app(env))
+    return TestClient(make_app(env))
 
 
 def _proxy_wrote_human_review(audit_log, request_id=REVIEW_ID):
@@ -225,15 +224,15 @@ def test_expired_paused_runs_are_discarded():
     from api.state import ReviewThreads
 
     now = [1000.0]
-    threads = ReviewThreads(ttl_seconds=60, clock=lambda: now[0])
-    threads.register("req-1", "thread-1")
-    now[0] += 61
+    with ReviewThreads(ttl_seconds=60, clock=lambda: now[0]) as threads:
+        threads.register("req-1", "thread-1")
+        now[0] += 61
 
-    expired = threads.register("req-2", "thread-2")
+        expired = threads.register("req-2", "thread-2")
 
-    assert expired == ["thread-1"]
-    assert not threads.is_resumable("req-1")
-    assert threads.is_resumable("req-2")
+        assert expired == ["thread-1"]
+        assert not threads.is_resumable("req-1")
+        assert threads.is_resumable("req-2")
 
 
 def test_first_decision_wins_in_queue(client, audit_log):

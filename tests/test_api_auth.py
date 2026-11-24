@@ -28,8 +28,8 @@ def env(audit_log):
 
 
 @pytest.fixture
-def client(env):
-    return TestClient(create_app(env))
+def client(env, make_app):
+    return TestClient(make_app(env))
 
 
 @pytest.fixture
@@ -61,8 +61,8 @@ def test_startup_fails_when_no_keys_configured(audit_log):
         create_app({"AUDIT_LOG_PATH": str(audit_log)})
 
 
-def test_startup_allowed_without_keys_in_explicit_demo_mode(audit_log):
-    app = create_app({"SENTINEL_DEMO_MODE": "1", "AUDIT_LOG_PATH": str(audit_log)})
+def test_startup_allowed_without_keys_in_explicit_demo_mode(audit_log, make_app):
+    app = make_app({"SENTINEL_DEMO_MODE": "1", "AUDIT_LOG_PATH": str(audit_log)})
     assert TestClient(app).get("/health").status_code == 200
 
 
@@ -142,8 +142,8 @@ def test_analyst_key_cannot_reach_hr_namespace(client, audit_log):
     assert "rbac_namespace_denied" in _audit_rules(audit_log)
 
 
-def test_demo_mode_without_keys_runs_as_readonly(audit_log, captured_pipeline):
-    app = create_app({"SENTINEL_DEMO_MODE": "1", "AUDIT_LOG_PATH": str(audit_log)})
+def test_demo_mode_without_keys_runs_as_readonly(audit_log, captured_pipeline, make_app):
+    app = make_app({"SENTINEL_DEMO_MODE": "1", "AUDIT_LOG_PATH": str(audit_log)})
 
     resp = TestClient(app).post("/run", json={"task": "hi"})
 
