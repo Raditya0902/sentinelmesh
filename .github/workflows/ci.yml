@@ -55,10 +55,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # The chroma-hnswlib wheel is built with -march=native and dies with
-          # SIGILL on some runner CPUs (seen on AMD EPYC 9V74), so rebuild it
-          # for a generic x86-64 target.
-          HNSWLIB_NO_NATIVE=1 pip install --force-reinstall --no-deps --no-binary chroma-hnswlib "chroma-hnswlib==$(pip show chroma-hnswlib | awk '/^Version:/{print $2}')"
+          # chroma-hnswlib 0.7.6 has no cp313 wheel, so pip compiles it with
+          # -march=native and the pip cache replays that build on every runner;
+          # a wheel built on one CPU dies with SIGILL on another (seen on AMD
+          # EPYC). Rebuild it uncached for a generic x86-64 target.
+          HNSWLIB_NO_NATIVE=1 pip install --no-cache-dir --force-reinstall --no-deps --no-binary chroma-hnswlib "chroma-hnswlib==$(pip show chroma-hnswlib | awk '/^Version:/{print $2}')"
           
       - name: Run Python tests
         run: |
