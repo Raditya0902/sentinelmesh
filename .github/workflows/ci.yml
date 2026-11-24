@@ -59,7 +59,8 @@ jobs:
       - name: Run Python tests
         run: |
           PYTHONPATH=. pytest tests/ --cov --cov-fail-under=80
-          PYTHONPATH=. python tests/run_attacks.py
+          grep -m1 'model name' /proc/cpuinfo
+          PYTHONPATH=. python -X faulthandler tests/run_attacks.py
 
   test-attacks-stack:
     runs-on: ubuntu-latest
@@ -94,7 +95,7 @@ jobs:
           timeout 60 bash -c 'until curl -sf http://localhost:8000/health; do sleep 2; done'
 
       - name: Run attack suite with live proxy
-        run: PYTHONPATH=. REQUIRE_PROXY=1 SKIP_LLM_TESTS=1 python tests/run_attacks.py
+        run: PYTHONPATH=. REQUIRE_PROXY=1 SKIP_LLM_TESTS=1 python -X faulthandler tests/run_attacks.py
 
       - name: Stop stack
         if: always()
