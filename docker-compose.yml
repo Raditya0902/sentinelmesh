@@ -1,6 +1,7 @@
 volumes:
   logs:
   chromadb_data:
+  api_data:
 
 services:
   chromadb:
@@ -43,13 +44,17 @@ services:
       - CHROMA_PORT=8000
       - LOBSTER_TRAP_URL=http://lobstertrap:8080
       - AUDIT_LOG_PATH=logs/audit.jsonl
+      # Paused human-review runs survive API restarts (named volume below)
+      - SENTINEL_CHECKPOINT_DB=data/checkpoints.sqlite
       - GROQ_API_KEY=${GROQ_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-openai/gpt-oss-120b}
       - SENTINEL_API_KEY=${SENTINEL_API_KEY:-}
       # SENTINEL_CALLER_KEYS, SENTINEL_DEMO_MODE and LT_AGENT_KEYS come from .env via env_file
-    command: uvicorn --factory api.main:create_app --host 0.0.0.0 --port 8000
+    # Single worker: the rate limiter is per process.
+    command: uvicorn --factory api.main:create_app --host 0.0.0.0 --port 8000 --workers 1
     volumes:
       - logs:/app/logs
+      - api_data:/app/data
     restart: always
 
   dashboard:

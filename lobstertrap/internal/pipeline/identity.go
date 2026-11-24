@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/coal/lobstertrap/internal/metadata"
 	"github.com/coal/lobstertrap/internal/policy"
 )
 
@@ -74,15 +73,20 @@ func keysEqual(presented, expected string) bool {
 // checkAgentIdentity returns a DENY result when the caller's identity claim cannot
 // be trusted, or nil when the agent is authenticated and its declared intent is one
 // it is registered for. It is a no-op when identity binding is disabled.
-func (p *Pipeline) checkAgentIdentity(declared *metadata.RequestHeaders, presentedKey string) *policy.RuleResult {
+func (p *Pipeline) checkAgentIdentity(req IngressRequest) *policy.RuleResult {
 	if p.agentKeys == nil {
 		return nil
 	}
+	if p.lockedOut(req) {
+		return authRateLimitedDeny()
+	}
+	declared := req.Declared
 	if declared == nil || declared.AgentID == "" {
 		return identityDeny(ruleAgentIdentityMissing, "agent identity missing.")
 	}
 	spec, registered := p.pol.Agents[declared.AgentID]
-	if !registered || !keysEqual(presentedKey, p.agentKeys[declared.AgentID]) {
+	if !registered || !keysEqual(req.AgentKey, p.agentKeys[declared.AgentID]) {
+		p.authFailures.recordFailure(p.lockoutKey(req))
 		return identityDeny(ruleAgentAuthFailed, "agent authentication failed.")
 	}
 	if !spec.AllowsIntent(declared.DeclaredIntent) {

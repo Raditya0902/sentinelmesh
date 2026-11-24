@@ -16,15 +16,15 @@ type ChatMessage struct {
 
 // ChatCompletionRequest is the OpenAI chat completions request format.
 type ChatCompletionRequest struct {
-	Model       string        `json:"model"`
-	Messages    []ChatMessage `json:"messages"`
+	Model    string        `json:"model"`
+	Messages []ChatMessage `json:"messages"`
 	// Ollama /api/generate sends a top-level "prompt" string instead of messages.
-	Prompt      string        `json:"prompt,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
+	Prompt      string   `json:"prompt,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	MaxTokens   *int     `json:"max_tokens,omitempty"`
 	// Pointer so we can distinguish "explicitly false" from "omitted".
 	// Ollama native endpoints default stream=true when the field is absent.
-	Stream      *bool         `json:"stream,omitempty"`
+	Stream *bool `json:"stream,omitempty"`
 	// Lobster Trap metadata headers (optional, from _lobstertrap field)
 	LobsterTrap *metadata.RequestHeaders `json:"_lobstertrap,omitempty"`
 	// Preserve other fields
@@ -40,16 +40,16 @@ type ChatChoice struct {
 
 // ChatCompletionResponse is the OpenAI chat completions response format.
 type ChatCompletionResponse struct {
-	ID         string                    `json:"id"`
-	Object     string                    `json:"object"`
-	Created    int64                     `json:"created"`
-	Model      string                    `json:"model"`
-	Choices    []ChatChoice              `json:"choices"`
+	ID      string       `json:"id"`
+	Object  string       `json:"object"`
+	Created int64        `json:"created"`
+	Model   string       `json:"model"`
+	Choices []ChatChoice `json:"choices"`
 	// Ollama /api/generate responds with a top-level "response" string.
-	Response   string                    `json:"response,omitempty"`
+	Response string `json:"response,omitempty"`
 	// Ollama /api/chat native format responds with a top-level "message" object.
-	Message    *ChatMessage              `json:"message,omitempty"`
-	Usage      *Usage                    `json:"usage,omitempty"`
+	Message     *ChatMessage              `json:"message,omitempty"`
+	Usage       *Usage                    `json:"usage,omitempty"`
 	LobsterTrap *metadata.ResponseHeaders `json:"_lobstertrap,omitempty"`
 }
 
@@ -116,9 +116,9 @@ func ExtractResponseText(resp *ChatCompletionResponse) string {
 // and optional Lobster Trap response headers.
 func MakeDenyResponse(message string, model string, headers *metadata.ResponseHeaders) *ChatCompletionResponse {
 	return &ChatCompletionResponse{
-		ID:         "lobstertrap-deny",
-		Object:     "chat.completion",
-		Model:      model,
+		ID:          "lobstertrap-deny",
+		Object:      "chat.completion",
+		Model:       model,
 		LobsterTrap: headers,
 		Choices: []ChatChoice{
 			{

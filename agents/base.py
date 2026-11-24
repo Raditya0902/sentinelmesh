@@ -13,13 +13,15 @@ the orchestrator can pause the run until a human decides.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from functools import lru_cache
 from typing import Any, Optional
 
 from openai import OpenAI
+
+from config import get_settings
 
 AGENT_KEY_HEADER = "X-Agent-Key"
 REVIEW_APPROVAL_HEADER = "X-Sentinel-Review-Approved"
@@ -60,7 +62,7 @@ def review_approval(request_id: Optional[str]) -> Iterator[None]:
 
 
 def _agent_key(agent_id: str) -> Optional[str]:
-    raw = os.getenv(AGENT_KEYS_ENV, "").strip()
+    raw = get_settings().lt_agent_keys.strip()
     if not raw:
         return None
     try:
@@ -75,10 +77,19 @@ def _agent_key(agent_id: str) -> Optional[str]:
     return key if isinstance(key, str) and key else None
 
 
+MAX_CACHED_CLIENTS = 4
+
+
+@lru_cache(maxsize=MAX_CACHED_CLIENTS)
+def _client_for(base_url: str, api_key: str, timeout: float, max_retries: int) -> OpenAI:
+    """One OpenAI client (and its HTTP connection pool) per proxy URL + key, per process."""
+    return OpenAI(base_url=base_url, api_key=api_key, timeout=timeout, max_retries=max_retries)
+
+
 def _make_client() -> OpenAI:
-    url = os.getenv("LOBSTER_TRAP_URL", "http://localhost:8080")
-    api_key = os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY") or "not-needed"
-    return OpenAI(base_url=f"{url}/v1", api_key=api_key)
+    s = get_settings()
+    return _client_for(f"{s.lobster_trap_url}/v1", s.llm_api_key,
+                       s.llm_timeout_seconds, s.llm_max_retries)
 
 
 def _request_headers(agent_id: str) -> dict[str, str]:
@@ -106,14 +117,14 @@ class LobsterTrapClient:
         self._client = client if client is not None else _make_client()
 
     def chat(self, messages: list[dict], **kwargs: Any) -> str:
-        model = os.getenv("LLM_MODEL", "llama3:latest")
+        model = get_settings().llm_model
         extra_body = {
             "_lobstertrap": {
                 "agent_id": self.agent_id,
                 "declared_intent": self.declared_intent,
             }
         }
-        raw = self._client.chat.completions.with_raw_response.create(
+        raw = self._client_for_call().chat.completions.with_raw_response.create(
             model=model,
             messages=messages,
             extra_body=extra_body,
@@ -124,6 +135,13 @@ class LobsterTrapClient:
         text = (response.choices[0].message.content or "") if response.choices else ""
         self._raise_if_held(raw.http_response.json(), text)
         return text
+
+    def _client_for_call(self) -> OpenAI:
+        """No retries while replaying a human-approved request: the proxy releases an
+        approval once, so a retry after a lost response would only be held again."""
+        if _approved_review_id.get():
+            return self._client.with_options(max_retries=0)
+        return self._client
 
     def _raise_if_held(self, body: Any, text: str) -> None:
         report = body.get("_lobstertrap") if isinstance(body, dict) else None

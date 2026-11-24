@@ -59,3 +59,10 @@ func TestDefaultDecisionsPath(t *testing.T) {
 		t.Errorf("expected empty path without an audit log, got %s", got)
 	}
 }
+
+func TestNewHTTPServer_HasTimeouts(t *testing.T) {
+	srv := newHTTPServer(":0", nil)
+	if srv.ReadHeaderTimeout == 0 || srv.ReadTimeout == 0 || srv.WriteTimeout == 0 || srv.IdleTimeout == 0 {
+		t.Fatalf("all server timeouts must be set: %+v", srv)
+	}
+}

@@ -124,11 +124,6 @@ egress_rules:
         match_type: boolean
         value: true
 
-rate_limits:
-  requests_per_minute: 60
-  requests_per_hour: 1000
-  burst_threshold: 15
-
 network:
   egress_policy: allowlist
   allowed_domains:

@@ -54,6 +54,8 @@ type Pipeline struct {
 
 	// agentKeys enables identity binding when non-nil (see identity.go).
 	agentKeys map[string]string
+	// authFailures locks out client IPs that keep failing agent authentication.
+	authFailures *authFailureLimiter
 	// approvals + reviews let a human-approved HUMAN_REVIEW request be replayed once.
 	approvals ReviewApprovals
 	reviews   *reviewLedger
@@ -99,6 +101,9 @@ func New(pol *policy.Policy, auditLogger *audit.Logger, opts ...Option) *Pipelin
 	for _, opt := range opts {
 		opt(p)
 	}
+	if p.agentKeys != nil && p.authFailures == nil {
+		p.authFailures = newAuthFailureLimiter(DefaultAuthFailuresPerWindow, DefaultAuthFailureWindow, nil)
+	}
 	return p
 }
 
@@ -107,6 +112,9 @@ type IngressRequest struct {
 	Prompt   string
 	Declared *metadata.RequestHeaders // nil if the agent sent no _lobstertrap field
 	AgentKey string                   // X-Agent-Key header
+	// ClientIP is the TCP peer address (never a forwarded-for header), used to
+	// lock out sources that keep failing agent authentication.
+	ClientIP string
 	// Body is the forwarded request body (without _lobstertrap). An approval is
 	// bound to it, so a replay cannot change the model, tools, or parameters.
 	Body []byte
@@ -124,7 +132,7 @@ func (p *Pipeline) ProcessIngress(promptText string, declared *metadata.RequestH
 // evaluateRules runs identity binding, the ingress table, review approvals, and the
 // network/filesystem policies, in that order.
 func (p *Pipeline) evaluateRules(req IngressRequest, meta *inspector.PromptMetadata, reqID string) (policy.RuleResult, string, bool) {
-	if denied := p.checkAgentIdentity(req.Declared, req.AgentKey); denied != nil {
+	if denied := p.checkAgentIdentity(req); denied != nil {
 		return *denied, "", true
 	}
 
@@ -175,22 +183,31 @@ func (p *Pipeline) resolveHumanReview(req IngressRequest, reqID string, result p
 	return result, ""
 }
 
+// inspectAndEvaluate runs DPI and the ingress rules. A locked-out caller is denied
+// before DPI runs (decided once here, so an expiring lockout can never let rules
+// evaluate against empty metadata), so a lockout also sheds the DPI CPU cost.
+func (p *Pipeline) inspectAndEvaluate(req IngressRequest, reqID string) (*inspector.PromptMetadata, policy.RuleResult, string, bool) {
+	if p.lockedOut(req) {
+		return &inspector.PromptMetadata{}, *authRateLimitedDeny(), "", true
+	}
+	meta := p.inspector.Inspect(req.Prompt)
+	// Enrich metadata with declared headers before policy evaluation so rules
+	// can match on has_mismatch and declared_intent.
+	if declared := req.Declared; declared != nil {
+		meta.DeclaredIntent = declared.DeclaredIntent
+		meta.HasMismatch = declared.DeclaredIntent != "" &&
+			declared.DeclaredIntent != meta.IntentCategory
+	}
+	result, approval, identityDenied := p.evaluateRules(req, meta, reqID)
+	return meta, result, approval, identityDenied
+}
+
 // ProcessIngressRequest inspects a prompt and evaluates all ingress enforcement.
 func (p *Pipeline) ProcessIngressRequest(req IngressRequest) *PipelineResult {
 	reqID := fmt.Sprintf("req-%s-%d", bootNonce, requestCounter.Add(1))
 	declared := req.Declared
 
-	meta := p.inspector.Inspect(req.Prompt)
-
-	// Enrich metadata with declared headers before policy evaluation so rules
-	// can match on has_mismatch and declared_intent.
-	if declared != nil {
-		meta.DeclaredIntent = declared.DeclaredIntent
-		meta.HasMismatch = declared.DeclaredIntent != "" &&
-			declared.DeclaredIntent != meta.IntentCategory
-	}
-
-	result, approval, identityDenied := p.evaluateRules(req, meta, reqID)
+	meta, result, approval, identityDenied := p.inspectAndEvaluate(req, reqID)
 
 	// Detect mismatches between declared and detected metadata
 	mismatches := metadata.DetectMismatches(declared, meta)

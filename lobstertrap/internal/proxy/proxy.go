@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -98,6 +99,7 @@ func (gp *GuardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Prompt:           promptText,
 		Declared:         chatReq.LobsterTrap,
 		AgentKey:         r.Header.Get(AgentKeyHeader),
+		ClientIP:         peerIP(r),
 		ReviewApprovalID: r.Header.Get(ReviewApprovalHeader),
 		Body:             forwardBody,
 	})
@@ -339,4 +341,14 @@ func (rr *responseRecorder) WriteHeader(code int) {
 // This is the main entry point for setting up the proxy.
 func BuildHandler(pol *policy.Policy, backendURL string, logger zerolog.Logger, auditLog *pipeline.Pipeline) (*GuardProxy, error) {
 	return New(auditLog, backendURL, logger)
+}
+
+// peerIP is the TCP peer's address. X-Forwarded-For is deliberately ignored: the
+// proxy is not deployed behind a trusted load balancer, so any client could set it.
+func peerIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }

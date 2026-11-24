@@ -136,3 +136,33 @@ def test_human_review_without_request_id_is_an_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="request_id"):
         _client(handler, monkeypatch).chat([{"role": "user", "content": "hi"}])
+
+
+def _counting_client(monkeypatch, status=503):
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.headers.get(REVIEW_APPROVAL_HEADER.lower()))
+        return httpx.Response(status, json={"error": {"message": "busy"}})
+
+    monkeypatch.setenv("LT_AGENT_KEYS", json.dumps(AGENT_KEYS))
+    openai_client = OpenAI(base_url="http://proxy.test/v1", api_key="unused", max_retries=2,
+                           http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return LobsterTrapClient("critic-agent-v1", "general", client=openai_client), calls
+
+
+def test_transient_errors_are_retried_normally(monkeypatch):
+    monkeypatch.setattr("openai._base_client.BaseClient._calculate_retry_timeout", lambda *a, **k: 0)
+    client, calls = _counting_client(monkeypatch)
+    with pytest.raises(Exception):
+        client.chat([{"role": "user", "content": "hi"}])
+    assert len(calls) == 3
+
+
+def test_approved_replay_is_never_retried(monkeypatch):
+    """The proxy releases an approval once; an SDK retry would just be held again."""
+    monkeypatch.setattr("openai._base_client.BaseClient._calculate_retry_timeout", lambda *a, **k: 0)
+    client, calls = _counting_client(monkeypatch)
+    with review_approval("req-7"), pytest.raises(Exception):
+        client.chat([{"role": "user", "content": "hi"}])
+    assert calls == ["req-7"]

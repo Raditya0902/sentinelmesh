@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -55,4 +56,25 @@ func defaultDecisionsPath(auditPath string) string {
 		return ""
 	}
 	return filepath.Join(filepath.Dir(auditPath), "review_decisions.jsonl")
+}
+
+const (
+	readHeaderTimeout = 10 * time.Second
+	readTimeout       = 60 * time.Second
+	// The response waits on the LLM backend; keep this well above model latency.
+	writeTimeout = 5 * time.Minute
+	idleTimeout  = 2 * time.Minute
+)
+
+// newHTTPServer bounds how long a client may take to send a request, so slow or
+// stalled connections (slowloris) cannot pin proxy goroutines indefinitely.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+	}
 }

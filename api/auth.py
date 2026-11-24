@@ -19,6 +19,7 @@ from typing import Optional
 
 from fastapi import Header, HTTPException, Request
 
+from api.rate_limit import TokenBucketLimiter, bucket_id
 from audit.writer import append_entry
 from rbac.roles import get_role
 
@@ -125,9 +126,53 @@ def _audit_auth_denial(
     )
 
 
-def _deny(request: Request, status: int, rule_name: str, message: str, role: str = "") -> HTTPException:
+def _deny(
+    request: Request,
+    status: int,
+    rule_name: str,
+    message: str,
+    role: str = "",
+    headers: Optional[Mapping[str, str]] = None,
+) -> HTTPException:
     _audit_auth_denial(request, rule_name, message, role)
-    return HTTPException(status_code=status, detail=message)
+    return HTTPException(status_code=status, detail=message, headers=dict(headers) if headers else None)
+
+
+ANONYMOUS_BUCKET = "anonymous-demo"
+# Failed key attempts allowed per client IP per minute before further attempts get 429.
+FAILED_AUTH_PER_MINUTE = 20
+
+
+def _too_many(request: Request, rule: str, message: str, retry: int, audit: bool, role: str = "") -> HTTPException:
+    headers = {"Retry-After": str(retry)}
+    if audit:
+        return _deny(request, 429, rule, message, role, headers=headers)
+    return HTTPException(status_code=429, detail=message, headers=headers)
+
+
+def _enforce_rate_limit(request: Request, bucket: str, role: str) -> None:
+    limiter: TokenBucketLimiter = request.app.state.rate_limiter
+    decision = limiter.check(bucket, get_role(role).rate_limit_rpm)
+    if decision.allowed:
+        return
+    raise _too_many(request, "rate_limited",
+                    f"Rate limit exceeded for role {role!r}; retry in {decision.retry_after_seconds}s",
+                    decision.retry_after_seconds, decision.should_audit, role)
+
+
+def _client_bucket(request: Request) -> str:
+    return "failed-auth:" + (request.client.host if request.client else "unknown")
+
+
+def _reject_bad_key(request: Request, status: int, rule: str, message: str) -> HTTPException:
+    """Each failed attempt spends a per-client token; once spent, answer 429 unaudited
+    (the first throttled attempt is audited once) so key spraying can't flood the log."""
+    limiter: TokenBucketLimiter = request.app.state.failed_auth_limiter
+    decision = limiter.check(_client_bucket(request), FAILED_AUTH_PER_MINUTE)
+    if decision.allowed:
+        return _deny(request, status, rule, message)
+    return _too_many(request, "auth_failures_throttled", "Too many failed authentication attempts",
+                     decision.retry_after_seconds, decision.should_audit)
 
 
 def caller_role(
@@ -140,11 +185,13 @@ def caller_role(
         if config.is_open_demo:
             logger.warning("DEMO MODE: unauthenticated request to %s served as %r",
                            request.url.path, DEMO_ANONYMOUS_ROLE)
+            _enforce_rate_limit(request, ANONYMOUS_BUCKET, DEMO_ANONYMOUS_ROLE)
             return DEMO_ANONYMOUS_ROLE
-        raise _deny(request, 401, "auth_missing_key", f"Missing {KEY_HEADER} header")
+        raise _reject_bad_key(request, 401, "auth_missing_key", f"Missing {KEY_HEADER} header")
     role = config.resolve_role(x_sentinel_key)
     if role is None:
-        raise _deny(request, 401, "auth_invalid_key", f"Invalid {KEY_HEADER}")
+        raise _reject_bad_key(request, 401, "auth_invalid_key", f"Invalid {KEY_HEADER}")
+    _enforce_rate_limit(request, bucket_id(x_sentinel_key), role)
     return role
 
 

@@ -21,26 +21,26 @@ type RequestHeaders struct {
 // the _lobstertrap field. They carry the full inspection report back to
 // the agent so it can see exactly what Lobster Trap detected and decided.
 type ResponseHeaders struct {
-	RequestID string        `json:"request_id"`
-	Verdict   string        `json:"verdict"` // ALLOW, DENY, HUMAN_REVIEW
+	RequestID string         `json:"request_id"`
+	Verdict   string         `json:"verdict"` // ALLOW, DENY, HUMAN_REVIEW
 	Ingress   *IngressReport `json:"ingress,omitempty"`
 	Egress    *EgressReport  `json:"egress,omitempty"`
 }
 
 // IngressReport shows declared vs detected metadata for the inbound prompt.
 type IngressReport struct {
-	Declared   *RequestHeaders          `json:"declared,omitempty"`
+	Declared   *RequestHeaders           `json:"declared,omitempty"`
 	Detected   *inspector.PromptMetadata `json:"detected"`
-	Mismatches []Mismatch               `json:"mismatches"`
-	Action     policy.Action            `json:"action"`
-	RuleName   string                   `json:"rule_name,omitempty"`
+	Mismatches []Mismatch                `json:"mismatches"`
+	Action     policy.Action             `json:"action"`
+	RuleName   string                    `json:"rule_name,omitempty"`
 }
 
 // EgressReport shows detected metadata for the model output.
 type EgressReport struct {
 	Detected *inspector.PromptMetadata `json:"detected"`
-	Action   policy.Action            `json:"action"`
-	RuleName string                   `json:"rule_name,omitempty"`
+	Action   policy.Action             `json:"action"`
+	RuleName string                    `json:"rule_name,omitempty"`
 }
 
 // Mismatch records a discrepancy between what the agent declared and
