@@ -5,19 +5,18 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import create_app
 
 ADMIN_KEY = "admin-key-0123456789abcdef"
 ANALYST_KEY = "analyst-key-0123456789abcd"
 
 
 @pytest.fixture
-def client(_isolated_audit_log):
+def client(_isolated_audit_log, make_app):
     env = {
         "SENTINEL_CALLER_KEYS": json.dumps({ADMIN_KEY: "admin", ANALYST_KEY: "analyst"}),
         "AUDIT_LOG_PATH": str(_isolated_audit_log),
     }
-    return TestClient(create_app(env))
+    return TestClient(make_app(env))
 
 
 def test_root_points_at_docs(client):
@@ -59,11 +58,11 @@ def test_analyst_cannot_read_audit(client):
     assert client.get("/audit", headers={"X-Sentinel-Key": ANALYST_KEY}).status_code == 403
 
 
-def test_create_app_from_process_env(monkeypatch, _isolated_audit_log):
+def test_create_app_from_process_env(monkeypatch, _isolated_audit_log, make_app):
     monkeypatch.setattr("api.main.load_env_file", lambda: False)
     monkeypatch.setenv("SENTINEL_CALLER_KEYS", json.dumps({ADMIN_KEY: "admin"}))
 
-    app = create_app()
+    app = make_app()
 
     assert app.state.settings.audit_log_path == _isolated_audit_log
 

@@ -56,24 +56,27 @@ def test_finished_run_checkpoint_is_deleted(sqlite_pipeline, held_analysis):
 
 def test_review_threads_persist_across_instances(tmp_path):
     db = tmp_path / "threads.sqlite"
-    ReviewThreads(db_path=str(db)).register("req-1", "thread-1")
+    with ReviewThreads(db_path=str(db)) as first:
+        first.register("req-1", "thread-1")
 
-    reopened = ReviewThreads(db_path=str(db))
+    with ReviewThreads(db_path=str(db)) as reopened:
+        assert reopened.is_resumable("req-1")
+        assert reopened.has_paused()
+        assert reopened.claim("req-1") == "thread-1"
 
-    assert reopened.is_resumable("req-1")
-    assert reopened.has_paused()
-    assert reopened.claim("req-1") == "thread-1"
-    assert ReviewThreads(db_path=str(db)).claim("req-1") is None, "claim is single-use"
+    with ReviewThreads(db_path=str(db)) as third:
+        assert third.claim("req-1") is None, "claim is single-use"
 
 
 def test_review_threads_ttl_uses_wall_clock(tmp_path):
     now = [1_000.0]
-    threads = ReviewThreads(db_path=str(tmp_path / "t.sqlite"), ttl_seconds=60, clock=lambda: now[0])
-    threads.register("req-1", "thread-1")
-    now[0] += 61
+    with ReviewThreads(db_path=str(tmp_path / "t.sqlite"), ttl_seconds=60,
+                       clock=lambda: now[0]) as threads:
+        threads.register("req-1", "thread-1")
+        now[0] += 61
 
-    assert threads.register("req-2", "thread-2") == ["thread-1"]
-    assert not threads.is_resumable("req-1")
+        assert threads.register("req-2", "thread-2") == ["thread-1"]
+        assert not threads.is_resumable("req-1")
 
 
 def test_append_unless_conflict_writes_when_no_conflict(tmp_path):
@@ -98,11 +101,10 @@ def test_append_unless_conflict_sees_existing_rows_under_lock(tmp_path):
     assert len(path.read_text().splitlines()) == 2, "nothing appended on conflict"
 
 
-def test_api_round_trip_with_shared_sqlite_file(sqlite_pipeline, held_analysis, _isolated_audit_log):
+def test_api_round_trip_with_shared_sqlite_file(sqlite_pipeline, held_analysis, _isolated_audit_log,
+                                                make_app):
     """Production layout: checkpoints and the review map share one SQLite file."""
     from fastapi.testclient import TestClient
-
-    from api.main import create_app
 
     admin, analyst = "admin-key-0123456789abcdef", "analyst-key-0123456789abcd"
     env = {
@@ -114,12 +116,12 @@ def test_api_round_trip_with_shared_sqlite_file(sqlite_pipeline, held_analysis, 
         "timestamp": "2026-11-23T10:00:00+00:00", "request_id": "req-9",
         "action": "HUMAN_REVIEW", "agent_id": "analysis-agent-v1",
     }) + "\n")
-    run = TestClient(create_app(env)).post(
+    run = TestClient(make_app(env)).post(
         "/run", json={"task": "t", "namespace": "legal"}, headers={"X-Sentinel-Key": analyst})
     assert run.json()["status"] == "pending_review"
 
     orch.reset_pipeline()  # API restart: new app, new connections, same file
-    decided = TestClient(create_app(env)).post(
+    decided = TestClient(make_app(env)).post(
         "/review/req-9/decide", json={"decision": "approve"}, headers={"X-Sentinel-Key": admin})
 
     assert decided.status_code == 200
@@ -130,19 +132,20 @@ def test_api_round_trip_with_shared_sqlite_file(sqlite_pipeline, held_analysis, 
 def test_expired_rows_do_not_count_as_paused(tmp_path):
     """Rotation must not stay blocked by a run abandoned past its TTL."""
     now = [1_000.0]
-    threads = ReviewThreads(db_path=str(tmp_path / "t.sqlite"), ttl_seconds=60, clock=lambda: now[0])
-    threads.register("req-1", "thread-1")
-    now[0] += 61
+    with ReviewThreads(db_path=str(tmp_path / "t.sqlite"), ttl_seconds=60,
+                       clock=lambda: now[0]) as threads:
+        threads.register("req-1", "thread-1")
+        now[0] += 61
 
-    assert not threads.has_paused()
-    assert not threads.is_resumable("req-1")
-    assert threads.claim("req-1") is None
+        assert not threads.has_paused()
+        assert not threads.is_resumable("req-1")
+        assert threads.claim("req-1") is None
 
 
 def test_file_db_uses_wal(tmp_path):
     db = tmp_path / "t.sqlite"
-    threads = ReviewThreads(db_path=str(db))
-    mode = threads._conn.execute("PRAGMA journal_mode").fetchone()[0]
+    with ReviewThreads(db_path=str(db)) as threads:
+        mode = threads._conn.execute("PRAGMA journal_mode").fetchone()[0]
     assert mode == "wal"
 
 

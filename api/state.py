@@ -61,6 +61,12 @@ class ReviewThreads:
             self._conn.close()
             self.closed = True
 
+    def __enter__(self) -> "ReviewThreads":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
         with self._lock:

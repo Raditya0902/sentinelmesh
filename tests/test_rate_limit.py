@@ -5,7 +5,6 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import create_app
 from api.rate_limit import TokenBucketLimiter
 from rbac.roles import get_role
 
@@ -58,12 +57,12 @@ def test_nonpositive_rpm_is_rejected():
 
 
 @pytest.fixture
-def client(_isolated_audit_log):
+def client(_isolated_audit_log, make_app):
     env = {
         "SENTINEL_CALLER_KEYS": json.dumps({AUDITOR_KEY: "auditor", ADMIN_KEY: "admin"}),
         "AUDIT_LOG_PATH": str(_isolated_audit_log),
     }
-    app = create_app(env)
+    app = make_app(env)
     app.state.rate_limiter = TokenBucketLimiter(clock=FakeClock())
     return TestClient(app)
 
