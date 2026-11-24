@@ -30,7 +30,7 @@ It started as a hackathon entry (*Transforming Enterprise Through AI*, Track 1: 
 
 ## Built on Lobster Trap (sponsor)
 
-The DPI proxy in [`lobstertrap/`](lobstertrap/) is **[Lobster Trap](https://github.com/coal/lobstertrap)**, provided by the hackathon sponsor. It is MIT-licensed according to its upstream README. I didn't write it. Lobster Trap supplies the reverse proxy, the regex DPI engine, the match-action policy table, the audit log and its built-in dashboard.
+The DPI proxy in [`lobstertrap/`](lobstertrap/) is **[Lobster Trap](https://github.com/veeainc/lobstertrap)**, provided by the hackathon sponsor under the [MIT license](lobstertrap/LICENSE). I didn't write it. Lobster Trap supplies the reverse proxy, the regex DPI engine, the match-action policy table, the audit log and its built-in dashboard.
 
 My changes to it (details in [docs/CHANGELOG.md](docs/CHANGELOG.md)):
 
@@ -342,7 +342,7 @@ sentinelmesh/
 | Layer | Technology |
 |-------|-----------|
 | Agent orchestration | LangGraph, LangChain |
-| DPI proxy | [Lobster Trap](https://github.com/coal/lobstertrap) (Go, sponsor-provided, modified) |
+| DPI proxy | [Lobster Trap](https://github.com/veeainc/lobstertrap) (Go, sponsor-provided, modified) |
 | LLM backend | Groq (`openai/gpt-oss-120b`) or Ollama (`llama3:latest`) |
 | Vector store | ChromaDB with RBAC namespaces |
 | API | FastAPI, Pydantic, SQLite (LangGraph checkpoints) |
@@ -352,5 +352,5 @@ sentinelmesh/
 
 ## Credits
 
-- **Lobster Trap** by the hackathon sponsor: [github.com/coal/lobstertrap](https://github.com/coal/lobstertrap), MIT-licensed according to its upstream README. Modifications are listed [above](#built-on-lobster-trap-sponsor).
+- **Lobster Trap** by the hackathon sponsor: [github.com/veeainc/lobstertrap](https://github.com/veeainc/lobstertrap), MIT-licensed ([lobstertrap/LICENSE](lobstertrap/LICENSE)). Modifications are listed [above](#built-on-lobster-trap-sponsor).
 - Hackathon submission materials are in [SUBMISSION.md](SUBMISSION.md).
