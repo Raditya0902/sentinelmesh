@@ -1,6 +1,9 @@
 package inspector
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // PromptMetadata holds all extracted metadata from a prompt or response text.
 type PromptMetadata struct {
@@ -39,31 +42,71 @@ func New() *Inspector {
 	return &Inspector{}
 }
 
+// scan runs one regex job per goroutine and waits for all of them. Each job writes
+// only its own variable, so no locking is needed. The pattern sets are independent
+// full-text scans (Go's regexp is linear in input length), so running them
+// concurrently cuts wall-clock latency roughly by the number of cores; total CPU
+// per request is unchanged.
+//
+// A panic in a job is re-raised on the caller's goroutine once all jobs finish, so
+// net/http's per-request recovery still applies (the request fails, nothing is
+// forwarded) instead of the whole proxy crashing.
+func scan(jobs ...func()) {
+	var (
+		wg       sync.WaitGroup
+		once     sync.Once
+		panicked any
+	)
+	wg.Add(len(jobs))
+	for _, job := range jobs {
+		go func(job func()) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					once.Do(func() { panicked = r })
+				}
+			}()
+			job()
+		}(job)
+	}
+	wg.Wait()
+	if panicked != nil {
+		panic(panicked)
+	}
+}
+
 // Inspect extracts metadata from the given text.
 func (ins *Inspector) Inspect(text string) *PromptMetadata {
 	meta := &PromptMetadata{}
+	var (
+		hasSensitivePaths bool
+		classification    ClassificationResult
+	)
+	matchInto := func(dst *bool, ps *PatternSet) func() {
+		return func() { *dst = ps.MatchAny(text) }
+	}
 
-	// Boolean signals
-	meta.ContainsCredentials = CredentialPatterns.MatchAny(text)
-	meta.ContainsPII = PIIPatterns.MatchAny(text)
-	meta.ContainsPIIRequest = PIIRequestPatterns.MatchAny(text)
-	meta.ContainsMalwareRequest = MalwareRequestPatterns.MatchAny(text)
-	meta.ContainsPhishingPatterns = PhishingPatterns.MatchAny(text)
-	meta.ContainsRoleImpersonation = RoleImpersonationPatterns.MatchAny(text)
-	meta.ContainsExfiltration = ExfiltrationPatterns.MatchAny(text)
-	meta.ContainsHarmPatterns = HarmPatterns.MatchAny(text)
-	meta.ContainsObfuscation = ObfuscationPatterns.MatchAny(text)
-	meta.ContainsInjectionPatterns = InjectionPatterns.MatchAny(text)
-	meta.ContainsSystemCommands = ShellCommandPatterns.MatchAny(text)
-	meta.ContainsCode = CodePatterns.MatchAny(text)
-	meta.ContainsURLs = URLPatterns.MatchAny(text)
+	scan(
+		matchInto(&meta.ContainsCredentials, &CredentialPatterns),
+		matchInto(&meta.ContainsPII, &PIIPatterns),
+		matchInto(&meta.ContainsPIIRequest, &PIIRequestPatterns),
+		matchInto(&meta.ContainsMalwareRequest, &MalwareRequestPatterns),
+		matchInto(&meta.ContainsPhishingPatterns, &PhishingPatterns),
+		matchInto(&meta.ContainsRoleImpersonation, &RoleImpersonationPatterns),
+		matchInto(&meta.ContainsExfiltration, &ExfiltrationPatterns),
+		matchInto(&meta.ContainsHarmPatterns, &HarmPatterns),
+		matchInto(&meta.ContainsObfuscation, &ObfuscationPatterns),
+		matchInto(&meta.ContainsInjectionPatterns, &InjectionPatterns),
+		matchInto(&meta.ContainsSystemCommands, &ShellCommandPatterns),
+		matchInto(&meta.ContainsCode, &CodePatterns),
+		matchInto(&meta.ContainsURLs, &URLPatterns),
+		matchInto(&hasSensitivePaths, &SensitivePathPatterns),
+		func() { meta.TargetPaths = FilePathPatterns.FindAll(text) },
+		func() { meta.TargetCommands = CommandExtractPatterns.FindAll(text) },
+		func() { classification = Classify(text) },
+	)
 
-	// Extract file paths
-	meta.TargetPaths = FilePathPatterns.FindAll(text)
 	meta.ContainsFilePaths = len(meta.TargetPaths) > 0
-
-	// Check for sensitive paths
-	hasSensitivePaths := SensitivePathPatterns.MatchAny(text)
 	meta.ContainsSensitivePaths = hasSensitivePaths
 
 	// Extract domains from URLs
@@ -80,11 +123,6 @@ func (ins *Inspector) Inspect(text string) *PromptMetadata {
 		}
 	}
 
-	// Extract commands
-	meta.TargetCommands = CommandExtractPatterns.FindAll(text)
-
-	// Classify intent
-	classification := Classify(text)
 	meta.IntentCategory = string(classification.Category)
 	meta.IntentConfidence = classification.Confidence
 

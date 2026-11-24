@@ -1,4 +1,5 @@
-FROM golang:1.23-alpine AS builder
+# Keep in sync with the go directive in lobstertrap/go.mod (CI reads it from there).
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 

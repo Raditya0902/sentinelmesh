@@ -12,29 +12,30 @@ ends the run as blocked.
 
 from __future__ import annotations
 
-# load_dotenv must run before any agent module is imported so env vars are
-# available when agents/base.py reads them for the first time.
-from dotenv import load_dotenv
-
-load_dotenv()
-
 import itertools
 import json
+import logging
 import threading
 import time as _time
 import uuid
 from collections.abc import Callable
 from typing import Literal, Optional, TypedDict
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, interrupt
 
 from agents import run_action, run_analysis, run_critic, run_extraction
 from agents.action_tools import ToolCallRejected
 from agents.base import HumanReviewRequired, is_sentinel_blocked, review_approval
+import storage
 from audit.writer import append_entry
+from config import get_settings, load_env_file
 from rbac import can_access_namespace, get_role
+
+logger = logging.getLogger(__name__)
 
 DECISIONS = ("approve", "reject")
 
@@ -160,11 +161,18 @@ def _run_llm_step(
     except StepDenied as denied:
         return {**state, "blocked": True, "error": str(denied)}
     except Exception as exc:
-        return {**state, "blocked": True, "error": f"{step} failed: {exc}"}
+        return {**state, "blocked": True, "error": _redacted_failure(step, exc)}
     cleared: AgentState = {**state, "approved_review": None}
     if is_sentinel_blocked(result):
         return {**cleared, "blocked": True, "error": result}
     return apply(cleared, result)
+
+
+def _redacted_failure(step: str, exc: Exception) -> str:
+    """Log the full exception; return only its type and a correlation ID to the caller."""
+    error_id = uuid.uuid4().hex[:12]
+    logger.error("%s step failed error_id=%s", step, error_id, exc_info=exc)
+    return f"{step} failed: {type(exc).__name__} (error_id={error_id})"
 
 
 def _set(field: str) -> Apply:
@@ -297,9 +305,49 @@ def build_pipeline() -> StateGraph:
     return graph
 
 
-# Paused runs live in memory: they survive across requests but not an API restart.
-_CHECKPOINTER = MemorySaver()
-_PIPELINE = build_pipeline().compile(checkpointer=_CHECKPOINTER)
+def strict_serializer() -> JsonPlusSerializer:
+    """Checkpoints are read back from disk: only LangGraph's built-in safe types may be
+    revived (the permissive default would import and call arbitrary modules named in a
+    tampered checkpoint), and never pickle. Run state is plain str/bool/list/dict."""
+    return JsonPlusSerializer(pickle_fallback=False, allowed_json_modules=None,
+                              allowed_msgpack_modules=None)
+
+
+class _PipelineHandle:
+    """The compiled graph plus the SQLite connection its checkpointer writes to."""
+
+    def __init__(self, db_path: str) -> None:
+        # The saver serialises access with its own lock, so sharing across threads is safe.
+        self.conn = storage.connect(db_path)
+        self.checkpointer = SqliteSaver(self.conn, serde=strict_serializer())
+        self.checkpointer.setup()
+        self.graph: CompiledStateGraph = build_pipeline().compile(checkpointer=self.checkpointer)
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+# Compiled once per process, on first use. Paused runs are checkpointed to SQLite
+# (SENTINEL_CHECKPOINT_DB), so they survive an API restart.
+_handle: Optional[_PipelineHandle] = None
+_handle_lock = threading.Lock()
+
+
+def _pipeline() -> _PipelineHandle:
+    global _handle
+    with _handle_lock:
+        if _handle is None:
+            _handle = _PipelineHandle(get_settings().sentinel_checkpoint_db)
+        return _handle
+
+
+def reset_pipeline() -> None:
+    """Drop the process's graph and DB connection (tests; simulates a restart)."""
+    global _handle
+    with _handle_lock:
+        if _handle is not None:
+            _handle.close()
+        _handle = None
 
 
 def _config(thread_id: str) -> dict:
@@ -325,17 +373,35 @@ def _finish(raw: dict, thread_id: str) -> dict:
 
 def discard_thread(thread_id: str) -> None:
     """Forget a run's checkpoint (finished, failed, or abandoned while paused)."""
-    _CHECKPOINTER.delete_thread(thread_id)
+    _pipeline().checkpointer.delete_thread(thread_id)
+
+
+def checkpointed_thread_ids() -> set[str]:
+    with _pipeline().checkpointer.cursor(transaction=False) as cur:
+        cur.execute("SELECT DISTINCT thread_id FROM checkpoints")
+        return {row[0] for row in cur.fetchall()}
+
+
+def discard_orphaned_threads(keep: set[str]) -> list[str]:
+    """Delete checkpoints of runs nobody can resume any more (no live review mapping:
+    expired, or claimed but never resumed). Only safe when no run is in flight, i.e.
+    at API startup. Returns the discarded thread IDs."""
+    orphaned = sorted(checkpointed_thread_ids() - keep)
+    for thread_id in orphaned:
+        discard_thread(thread_id)
+    return orphaned
 
 
 def paused_thread_count() -> int:
     """Number of runs with a live checkpoint (diagnostics/tests)."""
-    return len(_CHECKPOINTER.storage)
+    with _pipeline().checkpointer.cursor(transaction=False) as cur:
+        cur.execute("SELECT COUNT(DISTINCT thread_id) FROM checkpoints")
+        return int(cur.fetchone()[0])
 
 
 def _invoke(payload: object, thread_id: str) -> dict:
     try:
-        raw = _PIPELINE.invoke(payload, _config(thread_id))
+        raw = _pipeline().graph.invoke(payload, _config(thread_id))
     except Exception:
         discard_thread(thread_id)  # a crashed run can never be resumed
         raise
@@ -354,13 +420,14 @@ def resume_pipeline(thread_id: str, decision: str, note: str = "") -> dict:
     """Resume a run paused for human review with "approve" or "reject"."""
     if decision not in DECISIONS:
         raise ValueError(f"decision must be one of {DECISIONS}, got {decision!r}")
-    snapshot = _PIPELINE.get_state(_config(thread_id))
+    snapshot = _pipeline().graph.get_state(_config(thread_id))
     if not snapshot.next or "human_review_node" not in snapshot.next:
         raise ReviewNotPending(f"no run is waiting for review on thread {thread_id!r}")
     return _invoke(Command(resume={"decision": decision, "note": note}), thread_id)
 
 
 if __name__ == "__main__":
+    load_env_file()
     result = run_pipeline(
         task="Summarize the document and flag any compliance risks.",
         document="Patient SSN: 123-45-6789. Diagnosis: hypertension. Prescribed: lisinopril.",

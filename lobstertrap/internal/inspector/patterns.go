@@ -194,7 +194,11 @@ var ExfiltrationPatterns = compile("exfiltration", []string{
 	`(?i)\b(send|post|upload|transmit|exfiltrate)\b.{0,30}\b(base64|encod|encrypt|compress)\b`,
 	// DNS/HTTP exfiltration
 	`(?i)\b(DNS|HTTP|HTTPS|ICMP)\s+(exfiltrat|tunnel|covert\s+channel)\b`,
-	`(?i)\b(exfiltrate|extract|steal|siphon|smuggle)\b.{0,30}\b(data|file|database|record|credential|secret|key|token)\b`,
+	// Not "extract": it is the extraction agent's own vocabulary ("extract the key
+	// data points") and denied benign pipeline traffic.
+	`(?i)\b(exfiltrate|steal|siphon|smuggle)\b.{0,30}\b(data|file|database|record|credential|secret|key|token)s?\b`,
+	// Ship content to an explicit URL
+	`(?i)\b(send|post|upload|transmit|forward|exfiltrate)\b.{0,40}\bhttps?://`,
 	// Steganography
 	`(?i)\b(hide|embed|conceal)\b.{0,30}\b(data|payload|message|file)\b.{0,30}\b(image|picture|photo|audio|video|PDF)\b`,
 	// Piping data out

@@ -1,0 +1,13 @@
+[run]
+source =
+    agents
+    api
+    audit
+    orchestrator
+    rbac
+    config
+    storage
+
+[report]
+show_missing = true
+skip_covered = true

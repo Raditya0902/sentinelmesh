@@ -126,7 +126,7 @@ A `HUMAN_REVIEW` verdict actually gates the run:
 2. An admin approves or rejects with `POST /review/{request_id}/decide` (or from the dashboard). The decision is written to `review_decisions.jsonl` first, then the run resumes.
 3. **Approve** replays the held step with `X-Sentinel-Review-Approved: <request_id>`. The proxy releases it only if the first decision on that ID is an approval made after the hold and less than 15 minutes ago, the agent, intent and forwarded body are byte-identical, and the approval hasn't been used. The audit row shows `human_review_approved` / `review_approval: accepted:<id>`. **Reject** ends the run as blocked.
 
-Paused runs live in memory for up to 24 h (run a single uvicorn worker), so an API restart loses them. Audit rotation is refused while any run is paused. A decision made after that is recorded with `resumed: false`.
+Paused runs are checkpointed to SQLite (`SENTINEL_CHECKPOINT_DB`, on the `api_data` volume) for up to 24 h, so they survive an API restart. Run a single uvicorn worker (the per-key rate limiter is per process). Audit rotation is refused while any run is paused. A decision made after that is recorded with `resumed: false`.
 
 ## Action Agent Tools
 
@@ -209,11 +209,11 @@ The in-container suite (`make demo`, `tests/run_attacks.py`) runs 18 checks. It 
 
 | Prompt | p50 | p99 |
 |---|---|---|
-| Short benign task (128 B) | 0.42 ms | 1.0 ms |
-| Injection attempt (65 B) | 0.20 ms | 0.22 ms |
-| PII-bearing task (89 B) | 0.27 ms | 0.30 ms |
-| Task + 1 KB document | 3.1 ms | 3.3 ms |
-| Task + 4 KB document | 12.4 ms | 18.4 ms |
+| Short benign task (128 B) | 0.15 ms | 0.52 ms |
+| Injection attempt (65 B) | 0.08 ms | 0.11 ms |
+| PII-bearing task (89 B) | 0.10 ms | 0.13 ms |
+| Task + 1 KB document | 0.77 ms | 0.96 ms |
+| Task + 4 KB document | 3.0 ms | 4.1 ms |
 
 ```bash
 cd lobstertrap && go test ./internal/pipeline/ -run '^$' -bench BenchmarkProcessIngress -benchtime=2000x
@@ -223,36 +223,7 @@ cd lobstertrap && go test ./internal/pipeline/ -run '^$' -bench BenchmarkProcess
 
 ## Quick Start
 
-### Option A — Cloud (Railway, no local setup)
-
-The full backend (FastAPI + Lobster Trap + Groq) is deployed and live:
-
-```
-https://sentinelmesh-production.up.railway.app
-```
-
-```bash
-# Health check
-curl https://sentinelmesh-production.up.railway.app/health
-
-# Run the pipeline — the role comes from your API key, not the request body
-curl -s -X POST https://sentinelmesh-production.up.railway.app/run \
-  -H "Content-Type: application/json" \
-  -H "X-Sentinel-Key: <analyst-key>" \
-  -d '{"task":"Summarize the quarterly report","document":"Q1 revenue $5M, +20% YoY","namespace":"general"}'
-
-# Tail the audit log (admin or auditor key)
-curl -H "X-Sentinel-Key: <auditor-key>" https://sentinelmesh-production.up.railway.app/audit?limit=10
-
-# Run the 16 demo scenarios against the live API
-API_URL=https://sentinelmesh-production.up.railway.app python trigger_demo.py
-```
-
-> **Note:** The Streamlit governance dashboard runs locally only (Docker). The cloud deployment exposes the FastAPI backend and Lobster Trap proxy.
-
----
-
-### Option B — Local (Docker, full stack including dashboard)
+### Local (Docker, full stack including dashboard)
 
 **Prerequisites:** [Docker](https://docs.docker.com/get-docker/) + Docker Compose + [Ollama](https://ollama.com/) with `llama3:latest`
 
@@ -362,11 +333,11 @@ sentinelmesh/
 |-------|-----------|
 | Agent orchestration | LangGraph, LangChain |
 | DPI proxy | Lobster Trap (Go) — custom-built |
-| LLM backend | Groq (`openai/gpt-oss-120b`) — cloud; Ollama (`llama3:latest`) — local |
+| LLM backend | Groq (`openai/gpt-oss-120b`) or Ollama (`llama3:latest`) |
 | Vector store | ChromaDB with RBAC namespaces |
 | API | FastAPI + Pydantic |
 | Dashboard | Streamlit + Plotly |
-| Infrastructure | Docker, Docker Compose, Railway |
+| Infrastructure | Docker, Docker Compose |
 | CI/CD | GitHub Actions |
 
 ---
@@ -375,4 +346,3 @@ sentinelmesh/
 
 - **Track:** Agent Security & AI Governance
 - **Team:** Raditya0902
-- **Live Demo:** [sentinelmesh.up.railway.app](https://sentinelmesh.up.railway.app)

@@ -130,5 +130,5 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintln(os.Stderr)
 
-	return http.ListenAndServe(listenAddr, handler)
+	return newHTTPServer(listenAddr, handler).ListenAndServe()
 }

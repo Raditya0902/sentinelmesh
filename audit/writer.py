@@ -13,11 +13,11 @@ import json
 import logging
 import os
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,43 @@ def append_entry(
         logger.error("audit write failed path=%s rule=%s: %s", target, entry.get("rule_name"), exc)
         if is_strict() if strict is None else strict:
             raise AuditWriteError(f"audit write failed: {exc}") from exc
+
+
+def _parse_rows(lines: list[str]) -> list[dict]:
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def append_unless_conflict(
+    path: Path,
+    entry: Mapping,
+    find_conflict: Callable[[list[dict]], Optional[dict]],
+) -> Optional[dict]:
+    """Append ``entry`` unless ``find_conflict(existing_rows)`` returns a row.
+
+    The read and the append happen under one exclusive file lock, so two writers
+    (threads or processes) can never both pass the check. Returns the conflicting
+    row, or None after writing. Always strict: raises AuditWriteError on failure.
+    """
+    record = {"timestamp": utc_now_iso(), **entry}
+    try:
+        with _locked(path, "a+") as fh:
+            fh.seek(0)
+            conflict = find_conflict(_parse_rows(fh.readlines()))
+            if conflict is not None:
+                return conflict
+            _write_line(fh, record)
+    except OSError as exc:
+        logger.error("decision write failed path=%s: %s", path, exc)
+        raise AuditWriteError(f"audit write failed: {exc}") from exc
+    return None
 
 
 def _archive_copy(path: Path, stamp: str) -> Path:

@@ -4,10 +4,9 @@ Idempotent: uses stable IDs — safe to re-run without creating duplicates.
 Usage: PYTHONPATH=. python rbac/seed_namespaces.py
 """
 
-from dotenv import load_dotenv
+from typing import Optional
 
-load_dotenv()
-
+from config import load_env_file
 from rbac.vector_store import NamespacedVectorStore
 
 _SEEDER_ROLE = "admin"
@@ -111,8 +110,10 @@ _SEED_DATA: dict[str, list[dict]] = {
 }
 
 
-def seed() -> None:
-    store = NamespacedVectorStore()
+def seed(store: Optional[NamespacedVectorStore] = None) -> int:
+    """Upsert every sample document. Returns the number of documents written."""
+    store = store if store is not None else NamespacedVectorStore()
+    total = 0
 
     for namespace, entries in _SEED_DATA.items():
         documents = [e["document"] for e in entries]
@@ -120,11 +121,14 @@ def seed() -> None:
         metadatas = [{"namespace": namespace, **e["metadata"]} for e in entries]
 
         store.upsert(_SEEDER_ROLE, namespace, documents, ids, metadatas)
+        total += len(entries)
         print(f"  {namespace}: {len(entries)} document(s) seeded")
 
     print("Seed complete.")
+    return total
 
 
 if __name__ == "__main__":
+    load_env_file()
     print("Seeding ChromaDB namespaces...")
     seed()

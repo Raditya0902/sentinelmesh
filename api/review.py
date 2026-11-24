@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from api.auth import require_roles
 from api.schemas import RunResponse, to_run_response
 from api.state import review_lock, review_threads, settings, track_if_paused
-from audit.writer import append_entry
+from audit.writer import append_unless_conflict
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +153,17 @@ def _record_decision(request: Request, request_id: str, body: ReviewDecision, ro
         "decided_at": datetime.now(timezone.utc).isoformat(),
         "decided_by_role": role,
     }
+    entry = entry_map[request_id]
+
+    def live_decision(rows: list[dict]) -> Optional[dict]:
+        first = next((r for r in rows if r.get("request_id") == request_id), None)
+        return first if first and not _is_stale(entry, first) else None
+
     with review_lock:
-        existing = _read_decisions(cfg.decisions_path).get(request_id)
-        if existing and not _is_stale(entry_map[request_id], existing):
-            raise HTTPException(status_code=409, detail=f"request_id {request_id!r} already decided as {existing['decision']!r}")
-        append_entry(record, path=cfg.decisions_path, strict=True)
-    return entry_map[request_id], record
+        existing = append_unless_conflict(cfg.decisions_path, record, live_decision)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"request_id {request_id!r} already decided as {existing.get('decision')!r}")
+    return entry, record
 
 
 def _resume(request: Request, thread_id: Optional[str], body: ReviewDecision) -> Optional[RunResponse]:

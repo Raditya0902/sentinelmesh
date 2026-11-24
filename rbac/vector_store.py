@@ -1,8 +1,8 @@
-import os
 from typing import Optional
 
 import chromadb
 
+from config import get_settings
 from rbac.roles import assert_write_access, can_access_namespace
 
 _COLLECTION_PREFIX = "sentinelmesh_"
@@ -10,13 +10,11 @@ _COLLECTION_PREFIX = "sentinelmesh_"
 
 class NamespacedVectorStore:
     def __init__(self) -> None:
-        chroma_host = os.getenv("CHROMA_HOST", "")
-        if chroma_host:
-            chroma_port = int(os.getenv("CHROMA_PORT", "8000"))
-            self._client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
+        s = get_settings()
+        if s.chroma_host:
+            self._client = chromadb.HttpClient(host=s.chroma_host, port=s.chroma_port)
         else:
-            path = os.getenv("CHROMA_PERSIST_DIR", "./data/chromadb")
-            self._client = chromadb.PersistentClient(path=path)
+            self._client = chromadb.PersistentClient(path=s.chroma_persist_dir)
 
     def _collection(self, namespace: str) -> chromadb.Collection:
         return self._client.get_or_create_collection(f"{_COLLECTION_PREFIX}{namespace}")

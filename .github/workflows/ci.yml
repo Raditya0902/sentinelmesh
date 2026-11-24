@@ -15,9 +15,13 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: lobstertrap/go.mod
           cache-dependency-path: lobstertrap/go.sum
           
+      - name: Check gofmt
+        working-directory: ./lobstertrap
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
       - name: Run Go tests
         working-directory: ./lobstertrap
         run: go test ./... -v
@@ -54,7 +58,7 @@ jobs:
           
       - name: Run Python tests
         run: |
-          PYTHONPATH=. pytest tests/
+          PYTHONPATH=. pytest tests/ --cov --cov-fail-under=80
           PYTHONPATH=. python tests/run_attacks.py
 
   test-attacks-stack:

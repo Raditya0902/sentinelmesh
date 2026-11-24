@@ -7,11 +7,8 @@ const (
 	ActionAllow       Action = "ALLOW"
 	ActionDeny        Action = "DENY"
 	ActionLog         Action = "LOG"
-	ActionModify      Action = "MODIFY"
 	ActionQuarantine  Action = "QUARANTINE"
 	ActionHumanReview Action = "HUMAN_REVIEW"
-	ActionRateLimit   Action = "RATE_LIMIT"
-	ActionRedirect    Action = "REDIRECT"
 )
 
 // MatchType represents the type of match operation for a condition.
@@ -46,13 +43,6 @@ type GuardRule struct {
 	Conditions  []MatchCondition `yaml:"conditions" json:"conditions"`
 }
 
-// RateLimits configures rate limiting thresholds.
-type RateLimits struct {
-	RequestsPerMinute int `yaml:"requests_per_minute" json:"requests_per_minute"`
-	RequestsPerHour   int `yaml:"requests_per_hour" json:"requests_per_hour"`
-	BurstThreshold    int `yaml:"burst_threshold" json:"burst_threshold"`
-}
-
 // NetworkPolicy configures allowed/denied domains.
 type NetworkPolicy struct {
 	EgressPolicy   string   `yaml:"egress_policy" json:"egress_policy"`
@@ -74,7 +64,6 @@ type Policy struct {
 	DefaultAction Action           `yaml:"default_action" json:"default_action"`
 	IngressRules  []GuardRule      `yaml:"ingress_rules" json:"ingress_rules"`
 	EgressRules   []GuardRule      `yaml:"egress_rules" json:"egress_rules"`
-	RateLimits    RateLimits       `yaml:"rate_limits" json:"rate_limits"`
 	Network       NetworkPolicy    `yaml:"network" json:"network"`
 	Filesystem    FilesystemPolicy `yaml:"filesystem" json:"filesystem"`
 	// Agents is the registry of known agent identities. When identity binding is

@@ -1,4 +1,4 @@
-.PHONY: start stop test demo build seed clean keys
+.PHONY: start stop test test-policy test-python test-go demo build seed clean keys reset-reviews
 
 start:
 	docker compose up -d
@@ -6,9 +6,22 @@ start:
 stop:
 	docker compose down
 
-test:
-	./lobstertrap/lobstertrap test --policy proxy/policy.yaml
-	docker compose exec api sh -c "PYTHONPATH=. pytest tests/"
+COV_FAIL_UNDER := 80
+
+test: test-policy test-python
+
+# Policy tests run the binary from the built lobstertrap image against the CURRENT
+# proxy/policy.yaml (mounted read-only), so no host Go toolchain or stale host binary.
+test-policy:
+	docker compose run --rm --no-deps -v "$(CURDIR)/proxy:/policy:ro" \
+		--entrypoint lobstertrap lobstertrap test --policy /policy/policy.yaml
+
+test-python:
+	docker compose exec api sh -c "PYTHONPATH=. pytest tests/ --cov --cov-fail-under=$(COV_FAIL_UNDER)"
+
+# Needs a host Go toolchain (see lobstertrap/go.mod for the version).
+test-go:
+	cd lobstertrap && go test ./...
 
 demo:
 	docker compose exec api sh -c "PYTHONPATH=. python tests/run_attacks.py"
@@ -30,3 +43,10 @@ clean:
 	rm -rf logs/*.jsonl
 	rm -rf data/chromadb/*
 	find . -type d -name "__pycache__" -exec rm -rf {} +
+
+# Drop every paused human-review run (checkpoints + review map in the api_data volume).
+# Stops the API first so no open connection keeps writing to a deleted file.
+reset-reviews:
+	docker compose stop api
+	docker compose run --rm --no-deps --entrypoint sh api -c "rm -f data/checkpoints.sqlite data/checkpoints.sqlite-wal data/checkpoints.sqlite-shm"
+	docker compose start api

@@ -17,10 +17,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -28,11 +28,13 @@ from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from api.auth import audit_role_spoof, caller_role, ensure_bootable, load_auth_config, require_roles
+from api.rate_limit import TokenBucketLimiter
 from api.review import GOVERNANCE_READERS, GOVERNANCE_WRITERS, tail_file
 from api.review import router as review_router
 from api.schemas import RunRequest, RunResponse, to_run_response
 from api.state import ReviewThreads, Settings, review_lock, review_threads, settings, track_if_paused
 from audit.writer import default_audit_path, is_strict, rotate_audit_log
+from config import get_settings, load_env_file
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ router = APIRouter()
 def create_app(env: Optional[Mapping[str, str]] = None) -> FastAPI:
     """Build the API. Refuses to start without API keys unless SENTINEL_DEMO_MODE=1."""
     if env is None:
-        load_dotenv()
+        load_env_file()
         env = os.environ
     auth = load_auth_config(env)
     ensure_bootable(auth)
@@ -54,6 +56,7 @@ def create_app(env: Optional[Mapping[str, str]] = None) -> FastAPI:
         title="SentinelMesh API",
         description="Policy-enforced multi-agent orchestration",
         version="0.3.0",
+        lifespan=_lifespan,
     )
     app.state.auth = auth
     app.state.settings = Settings(
@@ -61,11 +64,32 @@ def create_app(env: Optional[Mapping[str, str]] = None) -> FastAPI:
         decisions_path=audit_path.parent / "review_decisions.jsonl",
         audit_strict=is_strict(env),
     )
-    app.state.review_threads = ReviewThreads()
+    app.state.review_threads = ReviewThreads(
+        db_path=env.get("SENTINEL_CHECKPOINT_DB") or get_settings().sentinel_checkpoint_db,
+    )
+    app.state.rate_limiter = TokenBucketLimiter()
+    app.state.failed_auth_limiter = TokenBucketLimiter()
     app.add_exception_handler(RequestValidationError, _audit_then_reject)
     app.include_router(router)
     app.include_router(review_router)
     return app
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    await run_in_threadpool(_discard_orphaned_runs, app)
+    yield
+    app.state.review_threads.close()
+
+
+def _discard_orphaned_runs(app: FastAPI) -> None:
+    """At startup no run is in flight, so any checkpoint without a live review mapping
+    is unreachable (expired or claimed-then-crashed) and only keeps PII at rest."""
+    from orchestrator.main import discard_orphaned_threads
+
+    removed = discard_orphaned_threads(app.state.review_threads.live_thread_ids())
+    if removed:
+        logger.info("discarded %d orphaned paused-run checkpoint(s)", len(removed))
 
 
 async def _audit_then_reject(request: Request, exc: RequestValidationError):

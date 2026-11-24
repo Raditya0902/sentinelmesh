@@ -6,7 +6,7 @@ __pycache__
 .env
 .git
 .github
-data/chromadb
+data/
 logs/*.jsonl
 !logs/.gitkeep
 lobstertrap/lobstertrap

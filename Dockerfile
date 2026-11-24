@@ -1,4 +1,4 @@
-FROM python:3.13-slim as base
+FROM python:3.13-slim AS base
 
 WORKDIR /app
 
@@ -16,7 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Bake Chroma's default ONNX embedding model (~83 MB) into the image. Otherwise the
+# first query downloads it at runtime and the first pipeline calls time out.
+RUN python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2 as E; E()(['warmup'])"
+
 # Copy project files
+COPY config.py storage.py ./
 COPY agents/ agents/
 COPY api/ api/
 COPY audit/ audit/
@@ -26,12 +31,14 @@ COPY rbac/ rbac/
 COPY proxy/ proxy/
 COPY configs/ configs/
 COPY tests/ tests/
+COPY .coveragerc ./
 COPY .env.example ./
 
-# Create logs directory
-RUN mkdir -p logs && touch logs/.gitkeep
+# logs/ holds the shared audit log; data/ holds paused-run checkpoints (SQLite)
+RUN mkdir -p logs data && chmod 700 data && touch logs/.gitkeep
 
 # Expose ports
 EXPOSE 8000 8501
 
-CMD ["sh", "-c", "uvicorn --factory api.main:create_app --host 0.0.0.0 --port ${PORT:-8000}"]
+# One worker: the rate limiter is per process (see api/rate_limit.py).
+CMD ["uvicorn", "--factory", "api.main:create_app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

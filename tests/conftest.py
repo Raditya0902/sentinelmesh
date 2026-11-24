@@ -1,4 +1,10 @@
+import os
+
 import pytest
+
+# Paused runs and the review → thread map live in SQLite. Always override (not
+# setdefault): inside the API container the env points at the live database.
+os.environ["SENTINEL_CHECKPOINT_DB"] = ":memory:"
 
 
 @pytest.fixture(autouse=True)

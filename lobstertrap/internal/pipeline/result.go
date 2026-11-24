@@ -8,16 +8,16 @@ import (
 
 // PipelineResult captures the full decision chain for a single request.
 type PipelineResult struct {
-	RequestID       string                   `json:"request_id"`
+	RequestID       string                    `json:"request_id"`
 	IngressMetadata *inspector.PromptMetadata `json:"ingress_metadata,omitempty"`
-	IngressResult   *policy.RuleResult       `json:"ingress_result"`
+	IngressResult   *policy.RuleResult        `json:"ingress_result"`
 	EgressMetadata  *inspector.PromptMetadata `json:"egress_metadata,omitempty"`
-	EgressResult    *policy.RuleResult       `json:"egress_result,omitempty"`
-	Blocked         bool                     `json:"blocked"`
-	BlockedAt       string                   `json:"blocked_at,omitempty"` // "ingress" or "egress"
-	DenyMessage     string                   `json:"deny_message,omitempty"`
-	DeclaredHeaders *metadata.RequestHeaders `json:"declared_headers,omitempty"`
-	Mismatches      []metadata.Mismatch      `json:"mismatches,omitempty"`
+	EgressResult    *policy.RuleResult        `json:"egress_result,omitempty"`
+	Blocked         bool                      `json:"blocked"`
+	BlockedAt       string                    `json:"blocked_at,omitempty"` // "ingress" or "egress"
+	DenyMessage     string                    `json:"deny_message,omitempty"`
+	DeclaredHeaders *metadata.RequestHeaders  `json:"declared_headers,omitempty"`
+	Mismatches      []metadata.Mismatch       `json:"mismatches,omitempty"`
 }
 
 // IsBlocked returns true if the request was blocked at any stage.

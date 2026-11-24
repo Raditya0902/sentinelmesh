@@ -15,7 +15,7 @@ Agent/App  -->  Lobster Trap (:8080)  -->  LLM Backend (:11434)
                   audit log
 ```
 
-No LLM calls are used for inspection. All classification runs in sub-millisecond time using compiled regex patterns.
+No LLM calls are used for inspection. Classification uses compiled regex patterns, scanned concurrently; cost is linear in prompt length (about 0.1 ms for a short prompt and 3 ms for a 4 KB one on an Apple M4, see `docs/threat-model.md`).
 
 ## Install
 
@@ -112,7 +112,7 @@ Print the version.
 
 ## Configuration
 
-Policies are defined in YAML. A policy file has five sections: rules, rate limits, network policy, and filesystem policy.
+Policies are defined in YAML. A policy file has these sections: ingress and egress rules, network policy, filesystem policy, and the `agents:` registry. Unknown keys, unknown fields or match types, invalid regexes, and the unimplemented `RATE_LIMIT`/`MODIFY`/`REDIRECT` actions are load errors.
 
 ### Policy structure
 
@@ -124,8 +124,8 @@ default_action: ALLOW    # action when no rule matches
 ingress_rules: [...]     # rules applied to incoming prompts
 egress_rules: [...]      # rules applied to model output
 
-rate_limits: { ... }
 network: { ... }
+agents: { ... }          # agent_id → allowed_intents (identity binding)
 filesystem: { ... }
 ```
 
@@ -154,10 +154,7 @@ ingress_rules:
 | `DENY` | Block and return `deny_message` to the caller |
 | `LOG` | Allow, but log the event |
 | `HUMAN_REVIEW` | Block until a human approves |
-| `MODIFY` | Allow with modifications (reserved) |
 | `QUARANTINE` | Block and quarantine for review |
-| `RATE_LIMIT` | Apply rate limiting |
-| `REDIRECT` | Redirect to a different backend (reserved) |
 
 #### Metadata fields
 
@@ -205,12 +202,9 @@ Every condition also supports `negate: true` to invert the match.
 
 ### Rate limits
 
-```yaml
-rate_limits:
-  requests_per_minute: 120
-  requests_per_hour: 2000
-  burst_threshold: 30
-```
+The policy has no `rate_limits:` section (it was never enforced, so it is now a load
+error). The proxy locks out a client IP after 10 failed agent authentications per
+minute; per-caller limits live in the SentinelMesh API.
 
 ### Network policy
 
